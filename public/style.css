@@ -515,6 +515,14 @@ textarea { min-height: 120px; resize: vertical; }
   border-radius: 0; background: var(--panel);
   -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
 }
+/* custom scrollbars (Chrome/Edge/Safari via -webkit pseudo elements) */
+.grid-wrap::-webkit-scrollbar { width: 10px; height: 10px; }
+.grid-wrap::-webkit-scrollbar-track { background: var(--bg); }
+.grid-wrap::-webkit-scrollbar-thumb {
+  background: var(--border); border: 2px solid var(--bg);
+}
+.grid-wrap::-webkit-scrollbar-thumb:hover { background: var(--accent-dark); }
+.grid-wrap::-webkit-scrollbar-corner { background: var(--bg); }
 .pick-grid { border-collapse: separate; border-spacing: 0; width: 100%; min-width: max-content; }
 .pick-grid th, .pick-grid td {
   padding: 6px 10px; font-size: 12px; white-space: nowrap; text-align: left;
