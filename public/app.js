@@ -377,8 +377,9 @@ function renderLanding() {
             draft switches to two picks per turn.</p></div>
           <div class="stepn"><div class="num">02</div><h3>Invite your group</h3>
             <p>Share a single link. Everyone chooses a name and receives a private link to
-            rejoin, or signs in with Google to switch devices at any time. When the table is
-            full, the seat order is randomized and the draft begins.</p></div>
+            rejoin, or signs in with Google to switch devices at any time. Once the table is
+            full, the creator gets a notification and starts the draft with a randomized
+            seat order.</p></div>
           <div class="stepn"><div class="num">03</div><h3>Draft in the open</h3>
             <p>Browse the full pool with filters and card previews, follow every deck as it
             grows, and track the whole draft on a live grid board.</p></div>
@@ -893,7 +894,7 @@ function renderLobby() {
             ${d.cubeUrl ? `<div><span class="spec-l">Source</span><span class="spec-v"><a href="${esc(d.cubeUrl)}" target="_blank" rel="noopener">cube ↗</a></span></div>` : ''}
           </div>
           <div class="seats">${seats.join('')}</div>
-          <p class="hint">The draft starts automatically with a random seat order once every seat is filled.</p>
+          <p class="hint">The draft begins when the creator starts it — the seat order is randomized then.</p>
 
           ${!joined ? `
           <div class="joinblock">
@@ -1087,7 +1088,7 @@ function bindPickbar(v, myTurn) {
     sel = -1;
     if (!items.length) { list.style.display = 'none'; return; }
     list.innerHTML = items.map((c, i) =>
-      `<div class="ac-item" data-i="${i}"><span>${esc(c.n)}</span><span class="mana">${esc(c.m)}</span></div>`).join('');
+      `<div class="ac-item" data-i="${i}"><span>${esc(c.n)}</span><span class="mana">${manaHtml(c.m)}</span></div>`).join('');
     list.style.display = 'block';
     $$('.ac-item', list).forEach((el) => el.addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -1295,8 +1296,28 @@ function bindGrid() {
   });
 }
 
+// ---------- mana symbols ----------
+// Rendered from Scryfall's card-symbol SVG set (W.svg, U.svg, 2.svg, WU.svg, …)
+const msImg = (code, cls = 'ms') =>
+  `<img class="${cls}" src="https://svgs.scryfall.io/card-symbols/${encodeURIComponent(code)}.svg" alt="${esc(code)}">`;
+
+// "{2}{W}{U}" -> generic 2 + white + blue symbol images (hybrid {W/U},
+// phyrexian {W/P} and X costs map to Scryfall codes by dropping the slash)
+function manaHtml(cost) {
+  if (!cost) return '';
+  return esc(cost).replace(/\{([^}]{1,5})\}/g, (m, sym) => {
+    const code = sym.replace(/\//g, '');
+    if (!/^[A-Z0-9]{1,3}$/i.test(code)) return m;
+    return msImg(code);
+  });
+}
+
 // ---------- pool ----------
-const COLOR_FILTERS = [['W', 'W'], ['U', 'U'], ['B', 'B'], ['R', 'R'], ['G', 'G'], ['M', 'M'], ['C', 'C']];
+const COLOR_FILTERS = [
+  ['W', msImg('W', 'ms msf')], ['U', msImg('U', 'ms msf')], ['B', msImg('B', 'ms msf')],
+  ['R', msImg('R', 'ms msf')], ['G', msImg('G', 'ms msf')],
+  ['M', 'M'], ['C', msImg('C', 'ms msf')],
+];
 const TYPE_FILTERS = ['Creature', 'Instant', 'Sorcery', 'Artifact', 'Enchantment', 'Planeswalker', 'Land'];
 
 function filterPool(v) {
@@ -1404,7 +1425,7 @@ function openCardModal(cardId) {
   const myTurn = v.curPid === me && !v.done;
   const inQueue = (state.myPriv?.queue || []).some((i) => i.c === cardId);
   openModal(`
-    ${c.img ? `<img class="bigcard" src="${esc(c.img)}" alt="${esc(c.n)}">` : `<h2>${esc(c.n)}</h2><p class="status-line">${esc(c.t)} ${esc(c.m)}</p>`}
+    ${c.img ? `<img class="bigcard" src="${esc(c.img)}" alt="${esc(c.n)}">` : `<h2>${esc(c.n)}</h2><p class="status-line">${esc(c.t)} ${manaHtml(c.m)}</p>`}
     <div class="status-line">${picked
       ? `Picked by <b>${esc(picker || '?')}</b> (pick ${v.picks.indexOf(pick) + 1})`
       : 'Available'}</div>
@@ -1463,7 +1484,7 @@ function pickRowHtml(p) {
   return `<div class="pick-row" data-card="${p.c}">
     <span class="num">${p.gi + 1}</span>
     <span>${esc(c.n)}</span>${p.auto ? ' <span class="automark" title="auto-picked from queue">A</span>' : ''}
-    <span class="mana">${esc(c.m)}</span>
+    <span class="mana">${manaHtml(c.m)}</span>
   </div>`;
 }
 
@@ -1602,12 +1623,15 @@ function renderAdminPanelHtml() {
     ${d.status === 'lobby' ? `
     <div class="adm-section">
       <div class="adm-actions">
+        ${players.length >= 2
+          ? `<button class="btn btn-sm ${players.length >= s.players ? 'btn-primary' : ''}" id="start-draft">Start draft (${players.length} players)</button>`
+          : ''}
         <button class="btn btn-sm" id="add-bot">Add bot</button>
-        ${players.length >= 2 ? `<button class="btn btn-sm" id="force-start">Start now with ${players.length}</button>` : ''}
         <button class="btn btn-sm" data-copy="${esc(adminLink)}" data-lbl="Admin link">Copy admin link</button>
       </div>
-      <p class="hint">Bots pick by CubeCobra ratings on their turn. The admin link makes another
-        device admin too.</p>
+      <p class="hint">The draft only starts when you start it — seat order is randomized then.
+        Bots pick by CubeCobra ratings on their turn. The admin link makes another device
+        admin too.</p>
     </div>` : `
     <div class="adm-section">
       <div class="adm-actions">
@@ -1634,8 +1658,7 @@ function renderAdminPanelHtml() {
           <input type="number" id="set-remind" value="${s.reminderHours}" min="0" max="168"></div>
       </div>
       <button class="btn btn-sm" id="set-save">Save settings</button>
-      <p class="hint">Everyone in the lobby sees these. Setting players to the number already
-        seated starts the draft immediately.</p>
+      <p class="hint">Everyone in the lobby sees these.</p>
     </div>` : `
     <div class="adm-section">
       <h3>Pick reminder</h3>
@@ -1655,11 +1678,7 @@ function renderAdminPanelHtml() {
 async function bindAdminPanel() {
   if (!isAdmin() || !$('#admin-panel')) return;
   bindCopyButtons();
-  $('#force-start')?.addEventListener('click', async () => {
-    const count = Object.keys(state.draft.players || {}).length;
-    await updateDoc(doc(db, 'rd-drafts', state.draftId), { 'settings.players': count });
-    toast('Starting the draft…');
-  });
+  $('#start-draft')?.addEventListener('click', startDraft);
   $('#add-bot')?.addEventListener('click', addBot);
   $$('[data-rmplayer]').forEach((b) => b.addEventListener('click', async () => {
     const pid = b.dataset.rmplayer;
@@ -1719,6 +1738,41 @@ async function bindAdminPanel() {
   }));
 }
 
+function shuffleArr(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Explicit admin action: randomize seats and begin the draft.
+async function startDraft() {
+  if (!isAdmin()) return;
+  const d = state.draft;
+  const count = Object.keys(d.players || {}).length;
+  const cap = settingsOf(d).players;
+  if (count < cap && !confirm(`Only ${count} of ${cap} seats are filled. Start anyway?`)) return;
+  try {
+    await runTransaction(db, async (t) => {
+      const ref = doc(db, 'rd-drafts', state.draftId);
+      const snap = await t.get(ref);
+      const cur = snap.data();
+      if (!cur || cur.status !== 'lobby') throw new Error('The draft has already started.');
+      const pids = Object.keys(cur.players || {});
+      if (pids.length < 2) throw new Error('At least 2 players are needed.');
+      t.update(ref, {
+        status: 'active',
+        order: shuffleArr(pids),
+        turnStartedAt: Date.now(),
+        startedAt: Date.now(),
+      });
+    });
+    toast('Draft started.');
+  } catch (e) { toast(e.message, true); }
+}
+
 // Admin edits the lobby settings; everyone's lobby view updates live.
 async function saveDraftSettings() {
   const d = state.draft;
@@ -1746,7 +1800,7 @@ async function saveDraftSettings() {
       settings: { players, totalPicks, singleRounds, reminderHours },
     });
     saveCreds(state.draftId, { draftName: name });
-    toast(players === joined ? 'Settings saved — the lobby is full, starting the draft.' : 'Settings saved.');
+    toast('Settings saved.');
   } catch (e) { toast(e.message, true); }
   if (btn) btn.disabled = false;
 }

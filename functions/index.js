@@ -264,21 +264,23 @@ exports.rdOnDraftWrite = onDocumentWritten(
     const title = after.name || 'Rotisserie Draft';
     const s = draftSettings(after);
 
-    // --- Lobby: start when full ---
+    // --- Lobby: starting is an explicit admin action. When the lobby
+    // fills up, push-notify the creator (if they hold a seat). ---
     if (after.status === 'lobby') {
-      const pids = Object.keys(after.players || {});
-      if (pids.length >= s.players) {
-        await db.runTransaction(async (t) => {
-          const snap = await t.get(ref);
-          const d = snap.data();
-          if (!d || d.status !== 'lobby') return;
-          t.update(ref, {
-            status: 'active',
-            order: shuffle(Object.keys(d.players || {})),
-            turnStartedAt: Date.now(),
-            startedAt: Date.now(),
+      const count = Object.keys(after.players || {}).length;
+      const wasFull = before.status === 'lobby' &&
+        Object.keys(before.players || {}).length >= draftSettings(before).players;
+      if (count >= s.players && !wasFull) {
+        const adminPid = Object.entries(after.players || {})
+          .find(([, p]) => p.uid && p.uid === after.adminUid)?.[0];
+        if (adminPid) {
+          await sendPush(draftId, adminPid, {
+            title,
+            body: 'The lobby is full — start the draft when you are ready!',
+            url,
+            tag: 'rd-full',
           });
-        });
+        }
       }
       return;
     }

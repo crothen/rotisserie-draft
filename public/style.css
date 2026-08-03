@@ -57,6 +57,9 @@ button { font-family: inherit; }
   text-transform: uppercase; color: var(--accent); border: 1px solid var(--accent-dark);
   border-radius: 0; padding: 1px 5px; margin-left: 4px; vertical-align: 1px;
 }
+.ms { width: 14px; height: 14px; display: inline-block; vertical-align: -2px; margin: 0 0.5px; }
+.msf { width: 16px; height: 16px; vertical-align: -3px; }
+.mini-chip[data-color] { padding: 5px 8px; }
 .mini-chip[data-color="W"] { color: #efeadb; }
 .mini-chip[data-color="U"] { color: #6ea4e8; }
 .mini-chip[data-color="B"] { color: #a89bb8; }
@@ -445,7 +448,7 @@ textarea { min-height: 120px; resize: vertical; }
   border-radius: 0; background: var(--panel);
   -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
 }
-.pick-grid { border-collapse: separate; border-spacing: 0; min-width: max-content; }
+.pick-grid { border-collapse: separate; border-spacing: 0; width: 100%; min-width: max-content; }
 .pick-grid th, .pick-grid td {
   padding: 6px 10px; font-size: 12px; white-space: nowrap; text-align: left;
   border-bottom: 1px solid rgba(48, 56, 80, 0.6); border-right: 1px solid rgba(48, 56, 80, 0.35);
