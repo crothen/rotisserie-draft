@@ -124,6 +124,8 @@ exports.rdFetchCube = onRequest({ cors: true }, async (req, res) => {
           .map((c) => ({
             name: c.details?.name || '',
             elo: Math.round(c.details?.elo || 0),
+            // cube owner explicitly picked this printing -> Scryfall print id
+            customId: c.details?.isDefault === false && c.cardID ? c.cardID : null,
           }))
           .filter((c) => c.name);
         res.json({ cards });

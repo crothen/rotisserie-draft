@@ -793,39 +793,91 @@ function parseTextList(text) {
   return names;
 }
 
-async function resolveScryfall(names, statusEl) {
-  const unique = [...new Set(names.map((n) => n.toLowerCase()))];
-  const nameMap = {};
+function extractScryfallCard(card) {
+  return {
+    n: card.name,
+    img: card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal || null,
+    m: card.mana_cost || card.card_faces?.map((f) => f.mana_cost).filter(Boolean).join(' // ') || '',
+    t: card.type_line || card.card_faces?.[0]?.type_line || '',
+    c: (card.colors?.length ? card.colors : card.card_faces?.flatMap((f) => f.colors || []) || []).join(''),
+    v: card.cmc ?? 0,
+    r: card.rarity || '',
+  };
+}
+
+// Resolve oracle data via /cards/collection: by name for every card,
+// plus by print id for cube entries with an explicitly chosen artwork.
+async function resolveScryfall(cubeCards, statusEl) {
+  const byName = {};
+  const byId = {};
   const notFound = [];
-  const uniqOrig = [...new Set(names)];
-  for (let i = 0; i < uniqOrig.length; i += 75) {
-    const batch = uniqOrig.slice(i, i + 75);
-    statusEl.textContent = `Fetching card data… ${Math.min(i + 75, uniqOrig.length)}/${uniqOrig.length}`;
+  const idents = [];
+  const seenN = new Set();
+  const seenI = new Set();
+  for (const cc of cubeCards) {
+    const k = cc.name.toLowerCase();
+    if (!seenN.has(k)) { seenN.add(k); idents.push({ name: cc.name }); }
+    if (cc.customId && !seenI.has(cc.customId)) {
+      seenI.add(cc.customId);
+      idents.push({ id: cc.customId });
+    }
+  }
+  for (let i = 0; i < idents.length; i += 75) {
+    const batch = idents.slice(i, i + 75);
+    statusEl.textContent = `Fetching card data… ${Math.min(i + 75, idents.length)}/${idents.length}`;
     const res = await fetch('https://api.scryfall.com/cards/collection', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifiers: batch.map((name) => ({ name })) }),
+      body: JSON.stringify({ identifiers: batch }),
     });
     if (!res.ok) throw new Error('Scryfall error ' + res.status);
     const data = await res.json();
     for (const card of data.data || []) {
-      const info = {
-        n: card.name,
-        img: card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal || null,
-        m: card.mana_cost || card.card_faces?.map((f) => f.mana_cost).filter(Boolean).join(' // ') || '',
-        t: card.type_line || card.card_faces?.[0]?.type_line || '',
-        c: (card.colors?.length ? card.colors : card.card_faces?.flatMap((f) => f.colors || []) || []).join(''),
-        v: card.cmc ?? 0,
-        r: card.rarity || '',
-      };
-      nameMap[card.name.toLowerCase()] = info;
-      if (card.card_faces?.length) nameMap[card.card_faces[0].name.toLowerCase()] = info;
+      const info = extractScryfallCard(card);
+      if (card.id) byId[card.id] = info;
+      if (!byName[card.name.toLowerCase()]) byName[card.name.toLowerCase()] = info;
+      const face = card.card_faces?.[0]?.name?.toLowerCase();
+      if (face && !byName[face]) byName[face] = info;
     }
-    for (const nf of data.not_found || []) notFound.push(nf.name);
+    for (const nf of data.not_found || []) if (nf.name) notFound.push(nf.name);
     await sleep(120);
   }
-  void unique;
-  return { nameMap, notFound };
+  return { byName, byId, notFound };
+}
+
+// Oldest paper printing per card name (batched prints search, oldest
+// first; the first hit per name wins). Returns name -> image URL.
+async function resolveOldestImages(names, statusEl) {
+  const need = new Set(names.map((n) => n.toLowerCase()));
+  const uniq = [...new Set(names)];
+  const map = {};
+  const BATCH = 16;
+  const totalBatches = Math.ceil(uniq.length / BATCH);
+  for (let i = 0; i < uniq.length; i += BATCH) {
+    const batch = uniq.slice(i, i + BATCH);
+    statusEl.textContent = `Finding oldest printings… ${Math.min(i / BATCH + 1, totalBatches)}/${totalBatches}`;
+    const q = '(' + batch.map((n) => `!"${n}"`).join(' or ') + ') not:digital -st:memorabilia';
+    let url = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(q)}&unique=prints&order=released&dir=asc`;
+    let pages = 0;
+    while (url && pages < 6) {
+      let data;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) break;
+        data = await res.json();
+      } catch { break; }
+      for (const card of data.data || []) {
+        const img = card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal;
+        if (!img) continue;
+        const keys = [card.name.toLowerCase(), ...(card.card_faces || []).map((f) => f.name.toLowerCase())];
+        for (const k of keys) if (need.has(k) && !map[k]) map[k] = img;
+      }
+      url = data.has_more ? data.next_page : null;
+      pages++;
+      await sleep(110);
+    }
+  }
+  return map;
 }
 
 async function createDraft() {
@@ -840,9 +892,9 @@ async function createDraft() {
 
   btn.disabled = true;
   try {
-    let cubeCards, cubeUrl = ''; // [{name, elo}]
+    let cubeCards, cubeUrl = ''; // [{name, elo, customId}]
     if (useText) {
-      cubeCards = parseTextList($('#c-text').value).map((name) => ({ name, elo: 0 }));
+      cubeCards = parseTextList($('#c-text').value).map((name) => ({ name, elo: 0, customId: null }));
       if (!cubeCards.length) throw new Error('Card list is empty.');
     } else {
       const cubeId = parseCubeId($('#c-cube').value);
@@ -853,18 +905,26 @@ async function createDraft() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to fetch cube');
       cubeCards = data.cards.map((c) =>
-        typeof c === 'string' ? { name: c, elo: 0 } : { name: c.name, elo: c.elo || 0 });
+        typeof c === 'string'
+          ? { name: c, elo: 0, customId: null }
+          : { name: c.name, elo: c.elo || 0, customId: c.customId || null });
     }
     const names = cubeCards.map((c) => c.name);
     const need = players * totalPicks;
     if (names.length < need) {
       throw new Error(`Pool has ${names.length} cards but ${players} players × ${totalPicks} picks needs ${need}. Reduce players/picks or use a bigger cube.`);
     }
-    const { nameMap, notFound } = await resolveScryfall(names, statusEl);
-    const pool = cubeCards.map(({ name, elo }) => ({
-      ...(nameMap[name.toLowerCase()] || { n: name, img: null, m: '', t: '', c: '', v: 0, r: '' }),
-      e: elo,
-    }));
+    const { byName, byId, notFound } = await resolveScryfall(cubeCards, statusEl);
+    // oldest printing images for all cards without an explicit cube artwork
+    const oldest = await resolveOldestImages(
+      [...new Set(cubeCards.filter((c) => !c.customId).map((c) => c.name))], statusEl);
+    const pool = cubeCards.map(({ name, elo, customId }) => {
+      const custom = customId ? byId[customId] : null;
+      const base = custom || byName[name.toLowerCase()] ||
+        { n: name, img: null, m: '', t: '', c: '', v: 0, r: '' };
+      const img = custom ? base.img : (oldest[name.toLowerCase()] || base.img);
+      return { ...base, img, e: elo };
+    });
     if (notFound.length) {
       toast(`${notFound.length} card(s) not found on Scryfall (kept without image): ${notFound.slice(0, 3).join(', ')}…`, true);
     }
