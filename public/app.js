@@ -910,6 +910,7 @@ function renderLobby() {
                 ? '<button class="btn btn-sm" id="link-google">Link Google account</button>'
                 : '<span class="chip">Google linked</span>'}
               <button class="btn btn-sm" id="push-btn">${state.pushOn ? 'Turn notifications off' : 'Enable notifications'}</button>
+              <button class="btn btn-sm btn-danger" id="leave-draft">Leave draft</button>
             </div>
             <p class="hint">The private link rejoins this draft on any device. With Google linked,
               signing in is enough.</p>
@@ -933,6 +934,7 @@ function renderLobby() {
   $('#j-name')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinDraft(); });
   $('#link-google')?.addEventListener('click', linkGoogle);
   $('#push-btn')?.addEventListener('click', togglePush);
+  $('#leave-draft')?.addEventListener('click', leaveDraft);
 }
 
 async function joinDraft() {
@@ -1659,7 +1661,16 @@ async function bindAdminPanel() {
     toast('Starting the draft…');
   });
   $('#add-bot')?.addEventListener('click', addBot);
-  $$('[data-rmbot]').forEach((b) => b.addEventListener('click', () => removeBot(b.dataset.rmbot)));
+  $$('[data-rmplayer]').forEach((b) => b.addEventListener('click', async () => {
+    const pid = b.dataset.rmplayer;
+    const p = state.draft.players?.[pid];
+    if (!p) return;
+    if (!p.bot && !confirm(`Remove ${p.name} from the draft?`)) return;
+    try {
+      await removePlayerFromLobby(pid);
+      toast(`${p.name} removed.`);
+    } catch (e) { toast(e.message, true); }
+  }));
   $('#del-draft')?.addEventListener('click', deleteDraft);
   $('#adm-remind-save')?.addEventListener('click', async () => {
     const h = Math.max(0, parseInt($('#adm-remind').value, 10) || 0);
@@ -1674,14 +1685,17 @@ async function bindAdminPanel() {
   const secrets = {};
   privSnaps.forEach((s) => { secrets[s.id] = s.data().secret; });
   const v = state.draft.status === 'lobby' ? null : draftView(state.draft);
+  const inLobby = state.draft.status === 'lobby';
   wrap.innerHTML = Object.entries(state.draft.players || {}).map(([pid, p]) => {
     const link = `${BASE}?d=${state.draftId}&p=${pid}&s=${secrets[pid] || ''}`;
     return `<div class="admin-player">
       <div class="top"><span class="nm">${esc(p.name)}${v?.curPid === pid ? ' <span class="dash-as">turn</span>' : ''}</span>
         ${p.bot
-          ? (state.draft.status === 'lobby' ? `<button class="btn btn-sm btn-danger" data-rmbot="${pid}">Remove</button>` : '')
+          ? (inLobby ? `<button class="btn btn-sm btn-danger" data-rmplayer="${pid}">Remove</button>` : '')
           : `<button class="btn btn-sm" data-copy="${esc(link)}" data-lbl="${esc(p.name)}'s link">Private link</button>
-             <button class="btn btn-sm" data-ping="${pid}">Ping</button>`}</div>
+             ${inLobby
+               ? `<button class="btn btn-sm btn-danger" data-rmplayer="${pid}">Remove</button>`
+               : `<button class="btn btn-sm" data-ping="${pid}">Ping</button>`}`}</div>
     </div>`;
   }).join('') || '<p class="hint">Nobody joined yet.</p>';
   bindCopyButtons();
@@ -1788,13 +1802,44 @@ async function addBot() {
   } catch (e) { toast(e.message, true); }
 }
 
-async function removeBot(pid) {
-  if (state.draft?.status !== 'lobby') { toast('Bots can only be removed in the lobby.', true); return; }
-  if (!state.draft.players?.[pid]?.bot) return;
+// Remove a seat (bot or human) while in the lobby. Transactional so a
+// removal cannot race the lobby-full auto-start.
+async function removePlayerFromLobby(pid) {
+  await runTransaction(db, async (t) => {
+    const ref = doc(db, 'rd-drafts', state.draftId);
+    const snap = await t.get(ref);
+    const d = snap.data();
+    if (!d || d.status !== 'lobby') throw new Error('The draft has already started.');
+    if (!d.players?.[pid]) throw new Error('That player already left.');
+    t.update(ref, { [`players.${pid}`]: deleteField() });
+  });
+  await deleteDoc(doc(db, 'rd-drafts', state.draftId, 'private', pid));
+}
+
+// A player gives up their own seat.
+async function leaveDraft() {
+  const me = myPid();
+  if (!me) return;
+  if (!confirm('Leave this draft? Your seat opens up again.')) return;
   try {
-    await updateDoc(doc(db, 'rd-drafts', state.draftId), { [`players.${pid}`]: deleteField() });
-    await deleteDoc(doc(db, 'rd-drafts', state.draftId, 'private', pid));
-    toast('Bot removed.');
+    await removePlayerFromLobby(me);
+    state.unsubPriv?.();
+    state.unsubPriv = null;
+    state.myPriv = null;
+    const all = allCreds();
+    if (all[state.draftId]) {
+      delete all[state.draftId].pid;
+      delete all[state.draftId].secret;
+      delete all[state.draftId].name;
+      localStorage.setItem('rd_creds', JSON.stringify(all));
+      state.creds = all[state.draftId];
+    }
+    if (state.user && !isAdmin()) {
+      await setDoc(doc(db, 'rd-users', state.user.uid), {
+        drafts: { [state.draftId]: deleteField() },
+      }, { merge: true });
+    }
+    toast('You left the draft.');
   } catch (e) { toast(e.message, true); }
 }
 
