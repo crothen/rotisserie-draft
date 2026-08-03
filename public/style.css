@@ -423,21 +423,26 @@ textarea { min-height: 120px; resize: vertical; }
 .btn-cta:hover { background: #97d2fb; border-color: #97d2fb; }
 @media (max-width: 480px) { .btn-cta { width: 100%; min-width: 0; } }
 
-/* ---------- floating deck button ---------- */
-.fab {
+/* ---------- floating buttons (deck + chat) ---------- */
+.fab-stack {
   position: fixed; right: 16px; bottom: 86px; z-index: 45;
-  width: 52px; height: 52px; border: none; cursor: pointer;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.fab {
+  position: relative; width: 52px; height: 52px; border: none; cursor: pointer;
   background: var(--accent); color: #1a1206;
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
 }
 .fab:hover { background: #ecb56b; }
+.fab-alt { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+.fab-alt:hover { background: var(--panel2); border-color: var(--accent); }
 .fab-count {
   position: absolute; top: -7px; right: -7px;
   background: var(--bg); color: var(--text); border: 1px solid var(--border);
   font-size: 11px; font-weight: 800; padding: 1px 5px; line-height: 1.4;
 }
-@media (min-width: 800px) { .fab { bottom: 24px; right: 24px; } }
+@media (min-width: 800px) { .fab-stack { bottom: 24px; right: 24px; } }
 
 /* ---------- own deck: sideboard + mana curve ---------- */
 .viewtoggle { display: flex; gap: 0; }

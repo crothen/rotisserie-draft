@@ -22,7 +22,9 @@ const URL_CONTACT = BASE + 'contact';
 const ICON_BELL_ON =
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>';
 const ICON_DECK =
-  '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="12" height="16" rx="1"/><path d="M8 2h12v16"/></svg>';
+  '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="9" y1="18" x2="21" y2="18"/><line x1="4" y1="6" x2="4.01" y2="6"/><line x1="4" y1="12" x2="4.01" y2="12"/><line x1="4" y1="18" x2="4.01" y2="18"/></svg>';
+const ICON_CHAT =
+  '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
 const ICON_SHARE =
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="10.5" x2="15.4" y2="6.5"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/></svg>';
 const ICON_BELL_OFF =
@@ -1292,9 +1294,13 @@ function renderDraft() {
       </div>
       <div id="tab-content">${tabContentHtml(v)}</div>
     </div>
-    ${me ? `<button class="fab" id="deck-fab" title="Your deck">${ICON_DECK}<span class="fab-count">${v.picks.filter((p) => p.p === me).length}</span></button>` : ''}`;
+    ${me ? `<div class="fab-stack">
+      ${state.tab !== 'chat' ? `<button class="fab fab-alt" id="chat-fab" title="Chat">${ICON_CHAT}${chatUnread() ? `<span class="fab-count">${chatUnread()}</span>` : ''}</button>` : ''}
+      <button class="fab" id="deck-fab" title="Your deck">${ICON_DECK}<span class="fab-count">${v.picks.filter((p) => p.p === me).length}</span></button>
+    </div>` : ''}`;
   bindTopbar();
   $('#deck-fab')?.addEventListener('click', openMyDeckModal);
+  $('#chat-fab')?.addEventListener('click', () => { state.tab = 'chat'; render(); });
   $$('.tab-btn').forEach((b) => b.addEventListener('click', () => { state.tab = b.dataset.tab; render(); }));
   bindTabContent(v);
   if (!v.done && me) bindPickbar(v, myTurn);
