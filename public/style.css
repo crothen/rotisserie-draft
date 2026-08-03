@@ -57,6 +57,13 @@ button { font-family: inherit; }
   text-transform: uppercase; color: var(--accent); border: 1px solid var(--accent-dark);
   border-radius: 0; padding: 1px 5px; margin-left: 4px; vertical-align: 1px;
 }
+.bottag, .droptag {
+  display: inline-block; font-size: 9px; font-weight: 800; letter-spacing: 0.08em;
+  border-radius: 0; padding: 1px 4px; margin-left: 4px; vertical-align: 1px;
+}
+.bottag { color: var(--blue); border: 1px solid var(--blue); }
+.droptag { color: var(--red); border: 1px solid var(--red); }
+.pick-grid td.gcell.skipped { color: #3c4460; font-style: italic; }
 .ms { width: 14px; height: 14px; display: inline-block; vertical-align: -2px; margin: 0 0.5px; }
 .msf { width: 16px; height: 16px; vertical-align: -3px; }
 .mini-chip[data-color] { padding: 5px 8px; }
@@ -536,9 +543,10 @@ textarea { min-height: 120px; resize: vertical; }
 }
 .pick-grid.img-mode td.gcell { padding: 3px 4px; max-width: none; }
 .gimg {
-  width: 72px; display: block; border-radius: 4.75% / 3.5%;
+  width: 144px; display: block; border-radius: 4.75% / 3.5%;
   background: var(--panel2); aspect-ratio: 488/680;
 }
+@media (min-width: 800px) { .gimg { width: 216px; } }
 .pick-grid.img-mode td.gcell.cur, .pick-grid.img-mode td.gcell:not(.filled) {
   min-width: 80px; text-align: center;
 }

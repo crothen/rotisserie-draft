@@ -345,6 +345,26 @@ exports.rdOnDraftWrite = onDocumentWritten(
     }
     if (after.status === 'done') return;
 
+    // --- Dropped player: their turn is skipped with a marker pick
+    // (c: -1) so the sequence and totals keep working. Chains through
+    // consecutive dropped turns via retrigger. ---
+    if (after.players?.[order[seq[picks.length]]]?.dropped) {
+      await db.runTransaction(async (t) => {
+        const snap = await t.get(ref);
+        const d = snap.data();
+        if (!d || d.status !== 'active') return;
+        const dPicks = d.picks || [];
+        if (dPicks.length >= seq.length) return;
+        const cp = d.order[seq[dPicks.length]];
+        if (!d.players?.[cp]?.dropped) return;
+        t.update(ref, {
+          picks: [...dPicks, { p: cp, c: -1, n: '', at: Date.now(), skip: true }],
+          turnStartedAt: Date.now(),
+        });
+      });
+      return;
+    }
+
     // --- Current player: try auto-pick from queue.
     // Only the TOP entry counts: if it was taken by someone else the
     // draft stops here so the player can decide for themselves.
@@ -496,6 +516,7 @@ exports.rdReminder = onSchedule(
       const picks = d.picks || [];
       if (picks.length >= seq.length) continue;
       const curPid = order[seq[picks.length]];
+      if (d.players?.[curPid]?.dropped || d.players?.[curPid]?.bot) continue;
       const name = d.players?.[curPid]?.name || 'player';
       await docSnap.ref.update({ lastReminderAt: Date.now() });
       await sendPush(docSnap.id, curPid, {

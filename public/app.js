@@ -1288,9 +1288,10 @@ function renderDraft() {
     ['pool', 'Pool'],
     ['grid', 'Grid'],
     ['players', 'Decks'],
-    ['queue', `Queue${state.myPriv?.queue?.length ? ` (${state.myPriv.queue.length})` : ''}`],
   ];
+  if (me) tabs.push(['queue', `Queue${state.myPriv?.queue?.length ? ` (${state.myPriv.queue.length})` : ''}`]);
   if (isAdmin()) tabs.push(['admin', 'Admin']);
+  if (state.tab === 'queue' && !me) state.tab = 'pool';
 
   $('#app').innerHTML = `
     ${topbar(d.name,
@@ -1298,7 +1299,8 @@ function renderDraft() {
       !!me)}
     <div class="container">
       ${turnBannerHtml(v, me)}
-      ${!v.done && me ? pickbarHtml(myTurn) : ''}
+      ${!v.done && me && !d.players[me]?.dropped ? pickbarHtml(myTurn) : ''}
+      ${me && d.players[me]?.dropped ? '<p class="hint">You were dropped from this draft — your turns are skipped. Ask the admin to bring you back.</p>' : ''}
       <div class="tabs">
         ${tabs.map(([id, lbl]) => `<button class="tab-btn ${state.tab === id ? 'active' : ''}" data-tab="${id}">${lbl}</button>`).join('')}
       </div>
@@ -1306,7 +1308,7 @@ function renderDraft() {
     </div>
     ${me && !state.chatOpen ? `<div class="fab-stack">
       <button class="fab fab-alt" id="chat-fab" title="Chat">${ICON_CHAT}${chatUnread() ? `<span class="fab-count">${chatUnread()}</span>` : ''}</button>
-      <button class="fab" id="deck-fab" title="Your deck">${ICON_DECK}<span class="fab-count">${v.picks.filter((p) => p.p === me).length}</span></button>
+      <button class="fab" id="deck-fab" title="Your deck">${ICON_DECK}<span class="fab-count">${v.picks.filter((p) => p.p === me && !p.skip).length}</span></button>
     </div>` : ''}
     ${me && state.chatOpen ? `<div class="chat-overlay">
       <div class="chat-ov-head"><span>Chat</span><button class="btn btn-sm" id="chat-close">✕</button></div>
@@ -1455,6 +1457,7 @@ async function doPick(cardId) {
       const snap = await t.get(ref);
       const d = snap.data();
       if (d.status !== 'active') throw new Error('The draft is not active.');
+      if (d.players?.[me]?.dropped) throw new Error('You were dropped from this draft.');
       const v = draftView(d);
       if (v.curPid !== me) throw new Error("It's not your turn.");
       if (v.pickedIds.has(cardId)) throw new Error('That card was just picked!');
@@ -1663,6 +1666,7 @@ function gridHtml(v) {
       const g = grid[pi][slot];
       if (g == null) return '<td class="gcell empty">—</td>';
       const pick = v.picks[g];
+      if (pick?.skip) return `<td class="gcell skipped" title="pick ${g + 1}: skipped">skip</td>`;
       const cls = ['gcell'];
       if (g === curG) cls.push('cur');
       else if (!pick && curG < v.seq.length && v.seq[g] === v.seq[curG] &&
@@ -1673,7 +1677,7 @@ function gridHtml(v) {
       cls.push('filled');
       const pc = state.pool[pick.c];
       const content = state.gridMode === 'images' && pc?.img
-        ? `<img class="gimg" loading="lazy" src="${esc(pc.img.replace('/normal/', '/small/'))}" alt="${esc(pick.n)}">`
+        ? `<img class="gimg" loading="lazy" src="${esc(pc.img)}" alt="${esc(pick.n)}">`
         : `${esc(pick.n)}${pick.auto ? ' <span class="automark" title="auto pick">A</span>' : ''}`;
       return `<td class="${cls.join(' ')}" data-card="${pick.c}" title="pick ${g + 1}: ${esc(pick.n)}">${content}</td>`;
     });
@@ -1693,8 +1697,8 @@ function gridHtml(v) {
     <div class="grid-wrap" id="grid-wrap"><table class="pick-grid ${state.gridMode === 'images' ? 'img-mode' : ''}">
       <thead><tr><th class="rowlbl">#</th>
         ${v.order.map((pid, pi) => `<th class="${pi === curPi ? 'curcol' : ''}">
-          ${esc(d.players[pid]?.name || '?')}
-          <div class="thsub">${v.picks.filter((p) => p.p === pid).length}/${v.s.totalPicks}</div></th>`).join('')}
+          ${esc(d.players[pid]?.name || '?')}${playerTags(d.players[pid] || {})}
+          <div class="thsub">${v.picks.filter((p) => p.p === pid && !p.skip).length}/${v.s.totalPicks}</div></th>`).join('')}
       </tr></thead>
       <tbody>${rows.join('')}</tbody>
     </table></div>`;
@@ -1896,7 +1900,7 @@ function openMyDeckModal() {
   if (!me) return;
   const v = draftView(state.draft);
   const sb = new Set(state.myPriv?.sideboard || []);
-  const picks = v.picks.map((p, gi) => ({ ...p, gi })).filter((p) => p.p === me);
+  const picks = v.picks.map((p, gi) => ({ ...p, gi })).filter((p) => p.p === me && !p.skip);
   const main = picks.filter((p) => !sb.has(p.c));
   const sbPicks = picks.filter((p) => sb.has(p.c));
   const groups = {};
@@ -1923,12 +1927,25 @@ function openMyDeckModal() {
     el.addEventListener('click', () => openCardModal(+el.dataset.card)));
 }
 
+// Small status tags shown next to player names (bot / dropped)
+function playerTags(p) {
+  return `${p.bot ? ' <span class="bottag" title="picks automatically">BOT</span>' : ''}` +
+    `${p.dropped ? ' <span class="droptag" title="dropped, turns are skipped">DROPPED</span>' : ''}`;
+}
+
+// Admin: flag changes on a player mid-draft (drop / convert to bot)
+async function setPlayerFlag(pid, field, value) {
+  await updateDoc(doc(db, 'rd-drafts', state.draftId), {
+    [`players.${pid}.${field}`]: value === null ? deleteField() : value,
+  });
+}
+
 // ---------- players / decks ----------
 function playersHtml(v) {
   const d = state.draft;
   const own = state.selPlayer === myPid();
   const sb = own ? new Set(state.myPriv?.sideboard || []) : new Set();
-  const selPicks = v.picks.map((p, gi) => ({ ...p, gi })).filter((p) => p.p === state.selPlayer);
+  const selPicks = v.picks.map((p, gi) => ({ ...p, gi })).filter((p) => p.p === state.selPlayer && !p.skip);
   const mainPicks = selPicks.filter((p) => !sb.has(p.c));
   const sbPicks = selPicks.filter((p) => sb.has(p.c));
   const curve = own && state.deckView === 'curve';
@@ -1973,9 +1990,10 @@ function playersHtml(v) {
   return `
     <div class="chips" style="margin-bottom:12px">
       ${v.order.map((pid) => {
-        const count = v.picks.filter((p) => p.p === pid).length;
+        const count = v.picks.filter((p) => p.p === pid && !p.skip).length;
+        const p2 = d.players[pid] || {};
         return `<button class="chip ${pid === state.selPlayer ? 'active' : ''} ${pid === v.curPid ? 'turn' : ''}"
-          data-player="${pid}">${esc(d.players[pid]?.name || '?')} <span class="cnt">${count}</span></button>`;
+          data-player="${pid}">${esc(p2.name || '?')}${playerTags(p2)} <span class="cnt">${count}</span></button>`;
       }).join('')}
     </div>
     <div class="row2" style="display:flex;gap:10px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
@@ -2062,7 +2080,7 @@ function bindPlayers() {
     const v = draftView(state.draft);
     const own = state.selPlayer === myPid();
     const sb = own ? new Set(state.myPriv?.sideboard || []) : new Set();
-    const picks = v.picks.filter((p) => p.p === state.selPlayer);
+    const picks = v.picks.filter((p) => p.p === state.selPlayer && !p.skip);
     let text = picks.filter((p) => !sb.has(p.c)).map((p) => p.n).join('\n');
     const sbNames = picks.filter((p) => sb.has(p.c)).map((p) => p.n);
     if (sbNames.length) text += '\n\nSideboard:\n' + sbNames.join('\n');
@@ -2262,6 +2280,24 @@ async function bindAdminPanel() {
     } catch (e) { toast(e.message, true); }
   }));
   $('#del-draft')?.addEventListener('click', deleteDraft);
+  $$('[data-drop]').forEach((b) => b.addEventListener('click', async () => {
+    const pid = b.dataset.drop;
+    const name = state.draft.players?.[pid]?.name || '?';
+    if (!confirm(`Drop ${name}? Their turns will be skipped from now on (their picks stay).`)) return;
+    try { await setPlayerFlag(pid, 'dropped', true); toast(`${name} dropped.`); } catch (e) { toast(e.message, true); }
+  }));
+  $$('[data-undrop]').forEach((b) => b.addEventListener('click', async () => {
+    try { await setPlayerFlag(b.dataset.undrop, 'dropped', null); toast('Player is back in the draft.'); } catch (e) { toast(e.message, true); }
+  }));
+  $$('[data-tobot]').forEach((b) => b.addEventListener('click', async () => {
+    const pid = b.dataset.tobot;
+    const name = state.draft.players?.[pid]?.name || '?';
+    if (!confirm(`Let a bot draft for ${name} from now on?`)) return;
+    try { await setPlayerFlag(pid, 'bot', true); toast(`A bot now picks for ${name}.`); } catch (e) { toast(e.message, true); }
+  }));
+  $$('[data-unbot]').forEach((b) => b.addEventListener('click', async () => {
+    try { await setPlayerFlag(b.dataset.unbot, 'bot', null); toast('Player picks for themselves again.'); } catch (e) { toast(e.message, true); }
+  }));
   $('#adm-remind-save')?.addEventListener('click', async () => {
     const h = Math.max(0, parseInt($('#adm-remind').value, 10) || 0);
     await updateDoc(doc(db, 'rd-drafts', state.draftId), { 'settings.reminderHours': h });
@@ -2278,14 +2314,20 @@ async function bindAdminPanel() {
   const inLobby = state.draft.status === 'lobby';
   wrap.innerHTML = Object.entries(state.draft.players || {}).map(([pid, p]) => {
     const link = `${BASE}?d=${state.draftId}&p=${pid}&s=${secrets[pid] || ''}`;
+    const origBot = pid.startsWith('bot-');
     return `<div class="admin-player">
-      <div class="top"><span class="nm">${esc(p.name)}${v?.curPid === pid ? ' <span class="dash-as">turn</span>' : ''}</span>
-        ${p.bot
-          ? (inLobby ? `<button class="btn btn-sm btn-danger" data-rmplayer="${pid}">Remove</button>` : '')
-          : `<button class="btn btn-sm" data-copy="${esc(link)}" data-lbl="${esc(p.name)}'s link">Private link</button>
-             ${inLobby
-               ? `<button class="btn btn-sm btn-danger" data-rmplayer="${pid}">Remove</button>`
-               : `<button class="btn btn-sm" data-ping="${pid}">Ping</button>`}`}</div>
+      <div class="top"><span class="nm">${esc(p.name)}${playerTags(p)}${v?.curPid === pid ? ' <span class="dash-as">turn</span>' : ''}</span>
+        ${inLobby
+          ? `${!p.bot ? `<button class="btn btn-sm" data-copy="${esc(link)}" data-lbl="${esc(p.name)}'s link">Private link</button>` : ''}
+             <button class="btn btn-sm btn-danger" data-rmplayer="${pid}">Remove</button>`
+          : `${!origBot ? `<button class="btn btn-sm" data-copy="${esc(link)}" data-lbl="${esc(p.name)}'s link">Private link</button>
+                <button class="btn btn-sm" data-ping="${pid}">Ping</button>` : ''}
+             ${p.dropped
+               ? `<button class="btn btn-sm" data-undrop="${pid}">Undrop</button>`
+               : `<button class="btn btn-sm btn-danger" data-drop="${pid}">Drop</button>`}
+             ${!origBot ? (p.bot
+               ? `<button class="btn btn-sm" data-unbot="${pid}">Make human</button>`
+               : `<button class="btn btn-sm" data-tobot="${pid}">To bot</button>`) : ''}`}</div>
     </div>`;
   }).join('') || '<p class="hint">Nobody joined yet.</p>';
   bindCopyButtons();
