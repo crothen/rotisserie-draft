@@ -458,12 +458,24 @@ async function setTabIndicator(mode) { // 'mine' | 'next' | null
 // ----------------------------------------------------------------
 // Focus preservation across re-renders
 // ----------------------------------------------------------------
+// Scroll containers whose offsets must survive a re-render (a pick by
+// another player rebuilds the DOM, and losing the position mid-scroll
+// is jarring). Keyed by selector; the chat list sticks to the bottom.
+const SCROLL_KEEP = ['#grid-wrap', '#chat-list', '.curve'];
+
 function render() {
   if (state.dragLock) return; // don't rebuild the DOM mid-drag
   const active = document.activeElement;
   const focusId = active?.id;
   let selStart = null;
   try { selStart = active?.selectionStart; } catch {} // throws on number/checkbox inputs
+  const scrolls = SCROLL_KEEP.map((sel) => {
+    const el = $(sel);
+    if (!el) return null;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
+    return { sel, top: el.scrollTop, left: el.scrollLeft, atBottom };
+  }).filter(Boolean);
+  const pageY = window.scrollY;
   const d = state.draft;
   if (!d) return;
   if (d.status === 'lobby') renderLobby();
@@ -471,6 +483,13 @@ function render() {
     if (!state.pool) return; // pool fetch in flight; loadPool() re-renders
     renderDraft();
   }
+  for (const s of scrolls) {
+    const el = $(s.sel);
+    if (!el) continue;
+    el.scrollLeft = s.left;
+    el.scrollTop = s.atBottom ? el.scrollHeight : s.top;
+  }
+  if (pageY && window.scrollY !== pageY) window.scrollTo(0, pageY);
   if (focusId) {
     const el = document.getElementById(focusId);
     if (el) {
