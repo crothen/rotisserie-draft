@@ -865,8 +865,7 @@ function renderLobby() {
   const seats = [];
   for (const [pid, p] of players) {
     const me = pid === myPid();
-    const sub = [me ? 'you' : null, p.bot ? 'bot' : null, p.uid && !p.bot ? 'Google' : null]
-      .filter(Boolean).join(' · ');
+    const sub = [me ? 'you' : null, p.bot ? 'bot' : null].filter(Boolean).join(' · ');
     seats.push(`<div class="seat ${me ? 'me' : ''}">
       <div class="s-name">${esc(p.name)}</div>
       ${sub ? `<div class="s-sub">${sub}</div>` : ''}
@@ -900,7 +899,6 @@ function renderLobby() {
             </div>
           </div>` : `
           <div class="youblock">
-            <h2>You're in as ${esc(d.players[myPid()].name)}</h2>
             <div class="you-actions">
               <button class="btn btn-sm" data-copy="${esc(privLink)}" data-lbl="Private link">Copy private link</button>
               ${!d.players[myPid()].uid
@@ -1654,7 +1652,7 @@ async function bindAdminPanel() {
   wrap.innerHTML = Object.entries(state.draft.players || {}).map(([pid, p]) => {
     const link = `${BASE}?d=${state.draftId}&p=${pid}&s=${secrets[pid] || ''}`;
     return `<div class="admin-player">
-      <div class="top"><span class="nm">${esc(p.name)}${p.uid ? ' <span class="dash-as">Google</span>' : ''}${v?.curPid === pid ? ' <span class="dash-as">turn</span>' : ''}</span>
+      <div class="top"><span class="nm">${esc(p.name)}${v?.curPid === pid ? ' <span class="dash-as">turn</span>' : ''}</span>
         ${p.bot
           ? (state.draft.status === 'lobby' ? `<button class="btn btn-sm btn-danger" data-rmbot="${pid}">Remove</button>` : '')
           : `<button class="btn btn-sm" data-copy="${esc(link)}" data-lbl="${esc(p.name)}'s link">Private link</button>
