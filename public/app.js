@@ -884,9 +884,14 @@ function renderLobby() {
             <h1>Lobby</h1>
             <span class="lobby-count">${players.length} of ${s.players} seats filled</span>
           </div>
-          <p class="lobby-meta">${s.totalPicks} cards each · rounds 1–${s.singleRounds} single pick, then 2 per turn ·
-            ${s.reminderHours ? `${s.reminderHours}h pick reminder` : 'no reminder'}
-            ${d.cubeUrl ? ` · <a href="${esc(d.cubeUrl)}" target="_blank" rel="noopener">cube ↗</a>` : ''}</p>
+          <div class="specs">
+            <div><span class="spec-l">Players</span><span class="spec-v">${s.players}</span></div>
+            <div><span class="spec-l">Cards each</span><span class="spec-v">${s.totalPicks}</span></div>
+            <div><span class="spec-l">Single rounds</span><span class="spec-v">${s.singleRounds}</span></div>
+            <div><span class="spec-l">Then</span><span class="spec-v">2 per turn</span></div>
+            <div><span class="spec-l">Reminder</span><span class="spec-v">${s.reminderHours ? s.reminderHours + 'h' : 'off'}</span></div>
+            ${d.cubeUrl ? `<div><span class="spec-l">Source</span><span class="spec-v"><a href="${esc(d.cubeUrl)}" target="_blank" rel="noopener">cube ↗</a></span></div>` : ''}
+          </div>
           <div class="seats">${seats.join('')}</div>
           <p class="hint">The draft starts automatically with a random seat order once every seat is filled.</p>
 
@@ -1611,6 +1616,25 @@ function renderAdminPanelHtml() {
       <h3>Players</h3>
       <div id="admin-players">${players.length ? '' : '<p class="hint">Nobody joined yet.</p>'}</div>
     </div>
+    ${d.status === 'lobby' ? `
+    <div class="adm-section">
+      <h3>Settings</h3>
+      <div class="field"><label>Draft name</label>
+        <input type="text" id="set-name" maxlength="80" value="${esc(d.name || '')}"></div>
+      <div class="adm-grid">
+        <div class="field"><label>Players</label>
+          <input type="number" id="set-players" value="${s.players}" min="2" max="16"></div>
+        <div class="field"><label>Cards each</label>
+          <input type="number" id="set-total" value="${s.totalPicks}" min="4" max="100"></div>
+        <div class="field"><label>Single rounds</label>
+          <input type="number" id="set-single" value="${s.singleRounds}" min="0" max="100"></div>
+        <div class="field"><label>Reminder (h)</label>
+          <input type="number" id="set-remind" value="${s.reminderHours}" min="0" max="168"></div>
+      </div>
+      <button class="btn btn-sm" id="set-save">Save settings</button>
+      <p class="hint">Everyone in the lobby sees these. Setting players to the number already
+        seated starts the draft immediately.</p>
+    </div>` : `
     <div class="adm-section">
       <h3>Pick reminder</h3>
       <div class="adm-inline">
@@ -1618,7 +1642,7 @@ function renderAdminPanelHtml() {
         <span class="hint" style="margin:0">hours (0 = off)</span>
         <button class="btn btn-sm" id="adm-remind-save">Save</button>
       </div>
-    </div>
+    </div>`}
     <div class="adm-section">
       <button class="btn btn-sm btn-danger" id="del-draft">Delete this draft</button>
       <p class="hint">Removes the pool, all picks, queues, and every link. Cannot be undone.</p>
@@ -1642,6 +1666,7 @@ async function bindAdminPanel() {
     await updateDoc(doc(db, 'rd-drafts', state.draftId), { 'settings.reminderHours': h });
     toast(`Reminder set to ${h}h`);
   });
+  $('#set-save')?.addEventListener('click', saveDraftSettings);
   // Private links need each player's secret from their private doc
   const wrap = $('#admin-players');
   if (!wrap) return;
@@ -1678,6 +1703,38 @@ async function bindAdminPanel() {
     } catch (e) { toast(e.message, true); }
     b.disabled = false;
   }));
+}
+
+// Admin edits the lobby settings; everyone's lobby view updates live.
+async function saveDraftSettings() {
+  const d = state.draft;
+  if (!isAdmin() || d.status !== 'lobby') { toast('Settings can only change in the lobby.', true); return; }
+  const btn = $('#set-save');
+  const name = $('#set-name').value.trim() || d.name;
+  const players = parseInt($('#set-players').value, 10) || 0;
+  const totalPicks = parseInt($('#set-total').value, 10) || 0;
+  const singleRounds = Math.max(0, parseInt($('#set-single').value, 10) || 0);
+  const reminderHours = Math.max(0, Math.min(168, parseInt($('#set-remind').value, 10) || 0));
+  const joined = Object.keys(d.players || {}).length;
+  try {
+    if (players < 2 || players > 16) throw new Error('Players must be between 2 and 16.');
+    if (players < joined) throw new Error(`${joined} players have already joined — players cannot be lower than that.`);
+    if (totalPicks < 4 || totalPicks > 100) throw new Error('Cards per player must be between 4 and 100.');
+    if (singleRounds > totalPicks) throw new Error('Single rounds cannot exceed cards per player.');
+    btn.disabled = true;
+    const poolSnap = await getDoc(doc(db, 'rd-drafts', state.draftId, 'meta', 'pool'));
+    const poolSize = poolSnap.exists() ? (poolSnap.data().cards || []).length : 0;
+    if (players * totalPicks > poolSize) {
+      throw new Error(`The pool has ${poolSize} cards but ${players} × ${totalPicks} picks needs ${players * totalPicks}.`);
+    }
+    await updateDoc(doc(db, 'rd-drafts', state.draftId), {
+      name,
+      settings: { players, totalPicks, singleRounds, reminderHours },
+    });
+    saveCreds(state.draftId, { draftName: name });
+    toast(players === joined ? 'Settings saved — the lobby is full, starting the draft.' : 'Settings saved.');
+  } catch (e) { toast(e.message, true); }
+  if (btn) btn.disabled = false;
 }
 
 // Cascade-delete the draft and everything linked to it: private docs

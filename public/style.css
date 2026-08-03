@@ -224,6 +224,15 @@ button { font-family: inherit; }
 }
 .adm-num:focus { border-color: var(--accent) !important; }
 .adm-inline .hint { flex: 1; white-space: nowrap; }
+.adm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+
+/* lobby settings specs (visible to everyone) */
+.specs { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 12px 0 4px; }
+.spec-l {
+  display: block; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted); font-weight: 700; margin-bottom: 2px;
+}
+.spec-v { font-size: 15px; font-weight: 600; }
 
 .mydrafts { padding: 20px 0 10px; border-bottom: 1px solid var(--border); }
 .mydrafts-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
