@@ -231,6 +231,17 @@ async function boot() {
     routeHome();
     return;
   }
+  // draft mode: the active tab is routed via the hash (#pool, #grid, …)
+  const DRAFT_TABS = ['pool', 'grid', 'players', 'queue', 'admin'];
+  const initialTab = location.hash.slice(1);
+  if (DRAFT_TABS.includes(initialTab)) state.tab = initialTab;
+  window.addEventListener('hashchange', () => {
+    const h = location.hash.slice(1);
+    if (DRAFT_TABS.includes(h) && h !== state.tab) {
+      state.tab = h;
+      render();
+    }
+  });
   state.creds = allCreds()[state.draftId] || null;
   subscribeDraft();
 }
@@ -1304,7 +1315,11 @@ function renderDraft() {
   $('#chat-fab')?.addEventListener('click', () => { state.chatOpen = true; render(); });
   $('#chat-close')?.addEventListener('click', () => { state.chatOpen = false; render(); });
   if (me && state.chatOpen) bindChat();
-  $$('.tab-btn').forEach((b) => b.addEventListener('click', () => { state.tab = b.dataset.tab; render(); }));
+  $$('.tab-btn').forEach((b) => b.addEventListener('click', () => {
+    state.tab = b.dataset.tab;
+    if (location.hash !== '#' + state.tab) location.hash = state.tab; // routed; hashchange skips re-render (tab already set)
+    render();
+  }));
   bindTabContent(v);
   if (!v.done && me) bindPickbar(v, myTurn);
 }
