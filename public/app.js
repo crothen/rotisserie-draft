@@ -65,6 +65,7 @@ const state = {
   unsubChat: null,
   chat: [],
   chatOpen: false,
+  chatDraft: '', // survives re-renders triggered by incoming messages
 };
 
 // Push is "on" only if THIS device's subscription is registered in my
@@ -338,6 +339,7 @@ async function sendChat() {
   if (!text || !myPid()) return;
   if (text.length > 500) { toast('Keep messages under 500 characters.', true); return; }
   input.value = '';
+  state.chatDraft = '';
   try {
     await addDoc(collection(db, 'rd-drafts', state.draftId, 'chat'), {
       pid: myPid(),
@@ -1510,6 +1512,18 @@ function bindTabContent(v) {
 }
 
 // ---------- chat (players only, floating overlay) ----------
+// [[Card Name]] tokens render as highlighted references into the pool.
+function chatText(text) {
+  return String(text).split(/(\[\[[^[\]]{1,80}\]\])/g).map((part) => {
+    const m = part.match(/^\[\[([^[\]]+)\]\]$/);
+    if (!m) return esc(part);
+    const id = (state.pool || []).findIndex((c) => c.n.toLowerCase() === m[1].toLowerCase());
+    return id >= 0
+      ? `<span class="cardref" data-card="${id}">${esc(state.pool[id].n)}</span>`
+      : `<span class="cardref">${esc(m[1])}</span>`;
+  }).join('');
+}
+
 function chatHtml() {
   const fmt = (at) => {
     const d = new Date(at || 0);
@@ -1522,12 +1536,16 @@ function chatHtml() {
       ${state.chat.length ? state.chat.map((m) => `
         <div class="chat-msg ${m.pid === myPid() ? 'mine' : ''}">
           <div class="chat-head"><span class="who">${esc(m.name)}</span><span class="when">${fmt(m.at)}</span></div>
-          <div class="txt">${esc(m.text)}</div>
+          <div class="txt">${chatText(m.text)}</div>
         </div>`).join('')
-      : '<p class="hint">No messages yet. Say hello!</p>'}
+      : '<p class="hint">No messages yet. Say hello! Type / to reference a card.</p>'}
     </div>
     <div class="chat-form">
-      <input type="text" id="chat-input" maxlength="500" placeholder="Message the table…" autocomplete="off">
+      <div class="ac-wrap">
+        <input type="text" id="chat-input" maxlength="500" placeholder="Message… ( / for a card )"
+          autocomplete="off" value="${esc(state.chatDraft || '')}">
+        <div class="ac-list chat-ac" id="chat-ac" style="display:none"></div>
+      </div>
       <button class="btn btn-primary" id="chat-send">Send</button>
     </div>`;
 }
@@ -1538,7 +1556,90 @@ function bindChat() {
   const list = $('#chat-list');
   if (list) list.scrollTop = list.scrollHeight;
   $('#chat-send')?.addEventListener('click', sendChat);
-  $('#chat-input')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+
+  const input = $('#chat-input');
+  const acEl = $('#chat-ac');
+  let items = [], sel = -1, tokStart = -1;
+  const hideAc = () => { if (acEl) acEl.style.display = 'none'; items = []; sel = -1; tokStart = -1; };
+  const uniqueNames = () => {
+    const seen = new Set(); const out = [];
+    for (const c of state.pool || []) {
+      const k = c.n.toLowerCase();
+      if (!seen.has(k)) { seen.add(k); out.push(c); }
+    }
+    return out;
+  };
+  const pickName = (name) => {
+    const caret = input.selectionStart;
+    input.value = input.value.slice(0, tokStart) + `[[${name}]] ` + input.value.slice(caret);
+    const pos = tokStart + name.length + 5;
+    state.chatDraft = input.value;
+    hideAc();
+    input.focus();
+    input.setSelectionRange(pos, pos);
+  };
+  const updateAc = () => {
+    state.chatDraft = input.value;
+    if (!acEl) return;
+    const caret = input.selectionStart;
+    const upto = input.value.slice(0, caret);
+    const m = upto.match(/(?:^|\s)\/([^/]{2,50})$/);
+    if (!m) { hideAc(); return; }
+    const q = m[1].toLowerCase();
+    tokStart = caret - m[1].length - 1;
+    const cands = uniqueNames();
+    const starts = cands.filter((c) => c.n.toLowerCase().startsWith(q));
+    const contains = cands.filter((c) => !c.n.toLowerCase().startsWith(q) && c.n.toLowerCase().includes(q));
+    items = [...starts, ...contains].slice(0, 8);
+    sel = -1;
+    if (!items.length) { hideAc(); return; }
+    acEl.innerHTML = items.map((c, i) =>
+      `<div class="ac-item" data-i="${i}"><span>${esc(c.n)}</span><span class="mana">${manaHtml(c.m)}</span></div>`).join('');
+    acEl.style.display = 'block';
+    $$('.ac-item', acEl).forEach((el) => el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      pickName(items[+el.dataset.i].n);
+    }));
+  };
+  input?.addEventListener('input', updateAc);
+  input?.addEventListener('blur', () => setTimeout(hideAc, 150));
+  input?.addEventListener('keydown', (e) => {
+    if (acEl && acEl.style.display !== 'none' && items.length) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % items.length; }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + items.length) % items.length; }
+      else if (e.key === 'Enter') { e.preventDefault(); pickName(items[sel >= 0 ? sel : 0].n); return; }
+      else if (e.key === 'Escape') { hideAc(); return; }
+      else return;
+      $$('.ac-item', acEl).forEach((el, i) => el.classList.toggle('sel', i === sel));
+      return;
+    }
+    if (e.key === 'Enter') sendChat();
+  });
+
+  // card references: hover preview on desktop, click/tap opens the card
+  const tip = ensureCardTip();
+  const canHover = matchMedia('(hover: hover)').matches;
+  $$('.cardref[data-card]').forEach((el) => {
+    const id = +el.dataset.card;
+    el.addEventListener('click', () => { tip.style.display = 'none'; openCardModal(id); });
+    if (canHover) {
+      el.addEventListener('mouseenter', () => {
+        const img = state.pool[id]?.img;
+        if (!img) return;
+        tip.innerHTML = `<img src="${esc(img)}" alt="">`;
+        tip.style.display = 'block';
+      });
+      el.addEventListener('mousemove', (e) => {
+        const w = 240, h = 335;
+        let x = e.clientX + 16, y = e.clientY - h / 2;
+        if (x + w > innerWidth - 8) x = e.clientX - w - 16;
+        y = Math.max(8, Math.min(y, innerHeight - h - 8));
+        tip.style.left = x + 'px';
+        tip.style.top = y + 'px';
+      });
+      el.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    }
+  });
 }
 
 // ---------- grid / draft overview table ----------
