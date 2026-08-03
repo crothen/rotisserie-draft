@@ -64,6 +64,7 @@ const state = {
   unsubPriv: null,
   unsubChat: null,
   chat: [],
+  chatOpen: false,
 };
 
 // Push is "on" only if THIS device's subscription is registered in my
@@ -1276,10 +1277,6 @@ function renderDraft() {
     ['players', 'Decks'],
     ['queue', `Queue${state.myPriv?.queue?.length ? ` (${state.myPriv.queue.length})` : ''}`],
   ];
-  if (me) {
-    const unread = state.tab === 'chat' ? 0 : chatUnread();
-    tabs.push(['chat', `Chat${unread ? ` (${unread})` : ''}`]);
-  }
   if (isAdmin()) tabs.push(['admin', 'Admin']);
 
   $('#app').innerHTML = `
@@ -1294,13 +1291,19 @@ function renderDraft() {
       </div>
       <div id="tab-content">${tabContentHtml(v)}</div>
     </div>
-    ${me ? `<div class="fab-stack">
-      ${state.tab !== 'chat' ? `<button class="fab fab-alt" id="chat-fab" title="Chat">${ICON_CHAT}${chatUnread() ? `<span class="fab-count">${chatUnread()}</span>` : ''}</button>` : ''}
+    ${me && !state.chatOpen ? `<div class="fab-stack">
+      <button class="fab fab-alt" id="chat-fab" title="Chat">${ICON_CHAT}${chatUnread() ? `<span class="fab-count">${chatUnread()}</span>` : ''}</button>
       <button class="fab" id="deck-fab" title="Your deck">${ICON_DECK}<span class="fab-count">${v.picks.filter((p) => p.p === me).length}</span></button>
+    </div>` : ''}
+    ${me && state.chatOpen ? `<div class="chat-overlay">
+      <div class="chat-ov-head"><span>Chat</span><button class="btn btn-sm" id="chat-close">✕</button></div>
+      ${chatHtml()}
     </div>` : ''}`;
   bindTopbar();
   $('#deck-fab')?.addEventListener('click', openMyDeckModal);
-  $('#chat-fab')?.addEventListener('click', () => { state.tab = 'chat'; render(); });
+  $('#chat-fab')?.addEventListener('click', () => { state.chatOpen = true; render(); });
+  $('#chat-close')?.addEventListener('click', () => { state.chatOpen = false; render(); });
+  if (me && state.chatOpen) bindChat();
   $$('.tab-btn').forEach((b) => b.addEventListener('click', () => { state.tab = b.dataset.tab; render(); }));
   bindTabContent(v);
   if (!v.done && me) bindPickbar(v, myTurn);
@@ -1477,7 +1480,6 @@ function tabContentHtml(v) {
     case 'grid': return gridHtml(v);
     case 'players': return playersHtml(v);
     case 'queue': return queueHtml(v);
-    case 'chat': return chatHtml();
     case 'admin': return renderAdminPanelHtml();
     default: return '';
   }
@@ -1488,14 +1490,12 @@ function bindTabContent(v) {
     case 'grid': return bindGrid(v);
     case 'players': return bindPlayers(v);
     case 'queue': return bindQueue(v);
-    case 'chat': return bindChat();
     case 'admin': return bindAdminPanel();
   }
 }
 
-// ---------- chat (players only) ----------
+// ---------- chat (players only, floating overlay) ----------
 function chatHtml() {
-  if (!myPid()) return '<div class="empty">The chat is for drafting players.</div>';
   const fmt = (at) => {
     const d = new Date(at || 0);
     const today = new Date().toDateString() === d.toDateString();
