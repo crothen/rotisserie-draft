@@ -153,13 +153,29 @@ exports.rdFetchCube = onRequest({ cors: true }, async (req, res) => {
   }
 });
 
+// Shared: verify the caller's Firebase ID token.
+async function requireAuth(req) {
+  const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
+  return getAuth().verifyIdToken(token);
+}
+function emailHash(decoded) {
+  return crypto.createHash('sha256')
+    .update(String(decoded.email || '').toLowerCase()).digest('hex');
+}
+
 // ---------------------------------------------------------------
-// HTTP: admin pings a player
+// HTTP: admin pings a player (ID token; caller must be the draft's
+// adminUid or the site owner)
 // ---------------------------------------------------------------
 exports.rdPing = onRequest(
   { cors: true, secrets: [VAPID_PRIVATE] },
   async (req, res) => {
-    const { draftId, pid, message, secret } = req.body || {};
+    let decoded;
+    try { decoded = await requireAuth(req); } catch {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { draftId, pid, message } = req.body || {};
     if (typeof draftId !== 'string' || !/^[\w-]{1,40}$/.test(draftId) ||
         typeof pid !== 'string' || !/^[\w-]{1,40}$/.test(pid)) {
       res.status(400).json({ error: 'Bad request' });
@@ -171,7 +187,7 @@ exports.rdPing = onRequest(
       return;
     }
     const d = snap.data();
-    if (!secret || secret !== d.adminSecret) {
+    if (decoded.uid !== d.adminUid && emailHash(decoded) !== OWNER_HASH) {
       res.status(403).json({ error: 'Not admin' });
       return;
     }
@@ -185,6 +201,95 @@ exports.rdPing = onRequest(
     res.json({ ok: true });
   }
 );
+
+// ---------------------------------------------------------------
+// HTTP: bind the caller's auth uid to a seat. Authorized by the
+// seat's rejoin secret, by a Google account already on the seat, or
+// by an existing binding (returns the secret for device migration).
+// Only this function may extend the uid allowlists.
+// ---------------------------------------------------------------
+exports.rdClaim = onRequest({ cors: true }, async (req, res) => {
+  let decoded;
+  try { decoded = await requireAuth(req); } catch {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  const { draftId, pid, secret } = req.body || {};
+  if (typeof draftId !== 'string' || !/^[\w-]{1,40}$/.test(draftId) ||
+      typeof pid !== 'string' || !/^[\w-]{1,40}$/.test(pid)) {
+    res.status(400).json({ error: 'Bad request' });
+    return;
+  }
+  const dRef = db.doc(`rd-drafts/${draftId}`);
+  const dSnap = await dRef.get();
+  if (!dSnap.exists) { res.status(404).json({ error: 'Draft not found' }); return; }
+  const d = dSnap.data();
+  if (!d.players?.[pid]) { res.status(404).json({ error: 'Seat not found' }); return; }
+  const pRef = db.doc(`rd-drafts/${draftId}/private/${pid}`);
+  const pSnap = await pRef.get();
+  const priv = pSnap.exists ? pSnap.data() : {};
+  const bySecret = !!secret && !!priv.secret && secret === priv.secret;
+  const byGoogle = !!d.players[pid].uid && d.players[pid].uid === decoded.uid;
+  const alreadyBound = (d.uids || {})[decoded.uid] === pid || (priv.uids || {})[decoded.uid] === true;
+  if (!bySecret && !byGoogle && !alreadyBound) {
+    res.status(403).json({ error: 'Not authorized for this seat' });
+    return;
+  }
+  await dRef.update({ [`uids.${decoded.uid}`]: pid });
+  await pRef.set({ uids: { [decoded.uid]: true } }, { merge: true });
+  // persist a Google account on the seat for future sign-in rejoin
+  if (decoded.firebase?.sign_in_provider !== 'anonymous' && d.players[pid].uid !== decoded.uid) {
+    await dRef.update({ [`players.${pid}.uid`]: decoded.uid });
+    await pRef.set({ uid: decoded.uid }, { merge: true });
+  }
+  res.json({ ok: true, pid, secret: priv.secret || null });
+});
+
+// ---------------------------------------------------------------
+// HTTP: submit a pick. Server-authoritative — clients cannot write
+// the pick log directly. Validates seat, turn and card availability.
+// ---------------------------------------------------------------
+exports.rdPick = onRequest({ cors: true }, async (req, res) => {
+  let decoded;
+  try { decoded = await requireAuth(req); } catch {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  const { draftId, cardId } = req.body || {};
+  if (typeof draftId !== 'string' || !/^[\w-]{1,40}$/.test(draftId) ||
+      !Number.isInteger(cardId) || cardId < 0) {
+    res.status(400).json({ error: 'Bad request' });
+    return;
+  }
+  const dRef = db.doc(`rd-drafts/${draftId}`);
+  try {
+    await db.runTransaction(async (t) => {
+      const snap = await t.get(dRef);
+      const d = snap.data();
+      if (!d) throw new Error('Draft not found');
+      if (d.status !== 'active') throw new Error('The draft is not active');
+      const pid = (d.uids || {})[decoded.uid];
+      if (!pid || !d.players?.[pid]) throw new Error('You are not seated in this draft');
+      if (d.players[pid].dropped) throw new Error('You were dropped from this draft');
+      const s = draftSettings(d);
+      const seq = buildSeq(d.order.length, s.totalPicks, s.singleRounds);
+      const picks = d.picks || [];
+      if (picks.length >= seq.length) throw new Error('The draft is complete');
+      if (d.order[seq[picks.length]] !== pid) throw new Error('It is not your turn');
+      if (picks.some((p) => p.c === cardId)) throw new Error('That card was just picked');
+      const poolSnap = await t.get(db.doc(`rd-drafts/${draftId}/meta/pool`));
+      const pool = poolSnap.exists ? poolSnap.data().cards || [] : [];
+      if (cardId >= pool.length) throw new Error('Unknown card');
+      t.update(dRef, {
+        picks: [...picks, { p: pid, c: cardId, n: pool[cardId].n, at: Date.now() }],
+        turnStartedAt: Date.now(),
+      });
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'Pick failed' });
+  }
+});
 
 // ---------------------------------------------------------------
 // HTTP: contact form — stores the message server-side so no email

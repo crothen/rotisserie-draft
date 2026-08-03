@@ -35,6 +35,20 @@
         }
       },
       {
+        "source": "/api/rd/claim",
+        "function": {
+          "functionId": "rdClaim",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/rd/pick",
+        "function": {
+          "functionId": "rdPick",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "/api/rd/inbox",
         "function": {
           "functionId": "rdInbox",

@@ -7,6 +7,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/11.3.0/firebase-firestore.js';
 import {
   GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut,
+  signInAnonymously, linkWithPopup,
 } from 'https://www.gstatic.com/firebasejs/11.3.0/firebase-auth.js';
 
 const VAPID_PUBLIC =
@@ -33,7 +34,7 @@ const ICON_BELL_OFF =
 // SHA-256 of the site owner's email — identifies the owner in public
 // code without publishing the address itself.
 const OWNER_HASH = '91fa8e4aaa27cba1007cef4cce055e11b2b60e9c651effd795a8a6f5a9a82fc8';
-const isOwner = () => !!state.user && !!state.ownerOk;
+const isOwner = () => !!realUser() && !!state.ownerOk;
 async function checkOwner(user) {
   if (!user?.email || !crypto?.subtle) return false;
   const buf = await crypto.subtle.digest('SHA-256',
@@ -51,7 +52,7 @@ const state = {
   pool: null,        // [{n,img,m,t,c,v,r}] — instance id = array index
   myPriv: null,      // my private doc {secret, queue, pushSubs}
   user: null,        // firebase auth user
-  creds: null,       // {pid, secret, adminSecret?}
+  creds: null,       // {pid, secret, name, draftName}
   tab: 'pool',
   selPlayer: null,
   filters: { search: '', colors: new Set(), types: new Set(), hidePicked: false, sort: 'pool' },
@@ -67,6 +68,7 @@ const state = {
   chat: [],
   chatOpen: false,
   chatDraft: '', // survives re-renders triggered by incoming messages
+  seatBound: false, // this device's auth uid is bound to my seat
 };
 
 // Push is "on" only if THIS device's subscription is registered in my
@@ -130,7 +132,7 @@ function removeWatched(draftId) {
   localStorage.setItem('rd_watched', JSON.stringify(all));
 }
 
-// localStorage creds: { [draftId]: {pid, secret, adminSecret, name, draftName} }
+// localStorage creds: { [draftId]: {pid, secret, name, draftName} }
 function allCreds() {
   try { return JSON.parse(localStorage.getItem('rd_creds') || '{}'); } catch { return {}; }
 }
@@ -181,7 +183,49 @@ function draftView(d) {
   return { s, order, seq, picks, done, curPid, pickedIds };
 }
 function myPid() { return state.creds?.pid || null; }
-function isAdmin() { return !!state.creds?.adminSecret; }
+// The signed-in Google user, if any (anonymous auth sessions are
+// invisible plumbing and never count as "signed in" for the UI).
+function realUser() {
+  return state.user && !state.user.isAnonymous ? state.user : null;
+}
+function isAdmin() {
+  const u = realUser();
+  return !!u && (state.draft?.adminUid === u.uid || !!state.ownerOk);
+}
+async function ensureAuthed() {
+  if (!auth.currentUser) await signInAnonymously(auth);
+  return auth.currentUser;
+}
+// POST to a backend endpoint with the caller's ID token attached.
+async function apiPost(path, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (auth.currentUser) headers.Authorization = 'Bearer ' + await auth.currentUser.getIdToken();
+  const res = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body || {}) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+// Bind this device's auth uid to my seat (via rdClaim when needed) so
+// the security rules let me at my queue, sideboard and the chat.
+async function ensureSeatBinding() {
+  const creds = allCreds()[state.draftId];
+  if (!state.draft || !creds?.pid) return false;
+  if (state.seatBound) return true;
+  try {
+    await ensureAuthed();
+    const uid = auth.currentUser.uid;
+    if (state.draft.uids?.[uid] === creds.pid) { state.seatBound = true; return true; }
+    const res = await apiPost('/api/rd/claim', {
+      draftId: state.draftId, pid: creds.pid, secret: creds.secret || null,
+    });
+    if (res.secret && !creds.secret) saveCreds(state.draftId, { secret: res.secret });
+    state.seatBound = true;
+    return true;
+  } catch (e) {
+    console.warn('seat binding failed', e);
+    return false;
+  }
+}
 
 // ----------------------------------------------------------------
 // Boot / routing
@@ -192,7 +236,6 @@ function parseParams() {
   if (draftId) {
     state.watcher = p.get('w') === '1';
     if (p.get('p') && p.get('s')) saveCreds(draftId, { pid: p.get('p'), secret: p.get('s') });
-    if (p.get('a')) saveCreds(draftId, { adminSecret: p.get('a') });
     if (p.get('p') || p.get('a')) history.replaceState(null, '', `${location.pathname}?d=${draftId}`);
   }
   return draftId;
@@ -220,6 +263,8 @@ async function boot() {
     state.user = user;
     state.ownerOk = await checkOwner(user);
     if (state.draft) {
+      const ok = await ensureSeatBinding();
+      if (ok) { subscribeMyPriv(); subscribeChat(); }
       tryUidRejoin();
       recordMembership();
       render();
@@ -261,14 +306,16 @@ function subscribeDraft() {
     if (first) {
       const existing = allCreds()[state.draftId];
       if (existing) saveCreds(state.draftId, { draftName: state.draft.name });
-      if (state.watcher && !existing?.pid && !existing?.adminSecret) {
+      if (state.watcher && !existing?.pid) {
         saveWatched(state.draftId, state.draft.name);
       }
+      ensureSeatBinding().then((ok) => {
+        if (ok) { subscribeMyPriv(); subscribeChat(); render(); }
+      });
       tryUidRejoin();
       recordMembership();
-      subscribeMyPriv();
     }
-    if (state.draft.status === 'active' || state.draft.status === 'done') subscribeChat();
+    if ((state.draft.status === 'active' || state.draft.status === 'done') && state.seatBound) subscribeChat();
     if ((state.draft.status === 'active' || state.draft.status === 'done') && !state.pool) {
       await loadPool();
       render();
@@ -295,21 +342,23 @@ function subscribeMyPriv() {
       state.myPriv = snap.exists() ? snap.data() : null;
       state.pushOn = computePushOn();
       render();
-    }
+    },
+    (e) => console.warn('private listener denied (seat not bound yet?)', e.code)
   );
 }
 
 // Mirror my membership into rd-users/{uid} so the dashboard can find
 // drafts across devices. Safe to call often (merge write, no-op if signed out).
 async function recordMembership(draftId = state.draftId, draftName, role) {
-  if (!state.user || !draftId) return;
+  if (!realUser() || !draftId) return;
   if (draftId === state.draftId) {
-    if (!state.creds?.pid && !state.creds?.adminSecret) return;
+    const amAdmin = state.draft?.adminUid && state.draft.adminUid === realUser()?.uid;
+    if (!state.creds?.pid && !amAdmin) return;
     draftName = draftName ?? state.draft?.name ?? '';
-    role = role ?? (state.creds?.adminSecret ? 'admin' : 'player');
+    role = role ?? (amAdmin ? 'admin' : 'player');
   }
   try {
-    await setDoc(doc(db, 'rd-users', state.user.uid), {
+    await setDoc(doc(db, 'rd-users', realUser().uid), {
       drafts: { [draftId]: { name: draftName || '', role: role || 'player', at: Date.now() } },
     }, { merge: true });
   } catch (e) { console.warn('recordMembership failed', e); }
@@ -317,7 +366,7 @@ async function recordMembership(draftId = state.draftId, draftName, role) {
 
 // Players-only chat: realtime listener on the chat subcollection.
 function subscribeChat() {
-  if (state.unsubChat || !myPid()) return;
+  if (state.unsubChat || !myPid() || !state.seatBound) return;
   const q = query(
     collection(db, 'rd-drafts', state.draftId, 'chat'),
     orderBy('at', 'desc'), limit(100));
@@ -353,16 +402,21 @@ async function sendChat() {
 
 async function tryUidRejoin() {
   const d = state.draft;
-  if (!d || !state.user || myPid()) return;
-  const match = Object.entries(d.players || {}).find(([, p]) => p.uid === state.user.uid);
+  const user = realUser();
+  if (!d || !user || myPid()) return;
+  const match = Object.entries(d.players || {}).find(([, p]) => p.uid === user.uid);
   if (!match) return;
   const [pid] = match;
-  const priv = await getDoc(doc(db, 'rd-drafts', state.draftId, 'private', pid));
-  saveCreds(state.draftId, { pid, secret: priv.exists() ? priv.data().secret : '' });
-  subscribeMyPriv();
-  recordMembership();
-  toast(`Welcome back, ${d.players[pid].name}!`);
-  render();
+  try {
+    const res = await apiPost('/api/rd/claim', { draftId: state.draftId, pid });
+    saveCreds(state.draftId, { pid, secret: res.secret || '' });
+    state.seatBound = true;
+    subscribeMyPriv();
+    subscribeChat();
+    recordMembership();
+    toast(`Welcome back, ${d.players[pid].name}!`);
+    render();
+  } catch (e) { console.warn('rejoin failed', e); }
 }
 
 // ----------------------------------------------------------------
@@ -458,7 +512,7 @@ function landingHeader(page) {
         ? '<a href="#" data-scroll="how">How it works</a>'
         : `<a href="${BASE}">How it works</a>`}
       <a href="${URL_CONTACT}">Contact</a>
-      <button class="btn btn-sm landing-signin">${state.user ? 'Dashboard' : 'Sign in'}</button>
+      <button class="btn btn-sm landing-signin">${realUser() ? 'Dashboard' : 'Sign in'}</button>
     </nav>
   </header>`;
 }
@@ -469,7 +523,7 @@ function bindLandingChrome() {
     $(`#sec-${a.dataset.scroll}`)?.scrollIntoView({ behavior: 'smooth' });
   }));
   $$('.landing-signin').forEach((b) => b.addEventListener('click', async () => {
-    if (state.user) { location.href = URL_DASH; return; }
+    if (realUser()) { location.href = URL_DASH; return; }
     try {
       await signInWithPopup(auth, new GoogleAuthProvider());
       // auth listener re-renders; signed-in landing shows ongoing drafts
@@ -481,7 +535,7 @@ function bindLandingChrome() {
 // LANDING — how it works, CTA, sign-in, contact
 // ----------------------------------------------------------------
 function renderLanding() {
-  const signedIn = !!state.user;
+  const signedIn = !!realUser();
   const hasDrafts = signedIn || Object.keys(allCreds()).length > 0;
   $('#app').innerHTML = `
     ${landingHeader('landing')}
@@ -546,11 +600,11 @@ function renderLanding() {
 async function collectDraftEntries() {
   const entries = {};
   for (const [id, c] of Object.entries(allCreds())) {
-    entries[id] = { name: c.draftName || id, admin: !!c.adminSecret, pid: c.pid || null };
+    entries[id] = { name: c.draftName || id, admin: false, pid: c.pid || null };
   }
-  if (state.user) {
+  if (realUser()) {
     try {
-      const snap = await getDoc(doc(db, 'rd-users', state.user.uid));
+      const snap = await getDoc(doc(db, 'rd-users', realUser().uid));
       if (snap.exists()) {
         for (const [id, info] of Object.entries(snap.data().drafts || {})) {
           entries[id] = {
@@ -650,7 +704,7 @@ function renderDashboard() {
     <div class="container">
       <div class="panel" id="dash-panel">
         <h2 style="margin-top:0">Your drafts</h2>
-        <div id="dash">${state.user || Object.keys(allCreds()).length
+        <div id="dash">${realUser() || Object.keys(allCreds()).length
           ? '<p class="hint">Loading…</p>'
           : '<p class="hint">No drafts yet. Sign in with Google to see drafts from other devices, or create one below.</p>'}</div>
       </div>
@@ -676,10 +730,10 @@ function renderSiteAdmin() {
       ${topbar('Rotisserie Draft', 'Site admin')}
       <div class="container"><div class="panel" style="border-bottom:none">
         <h1>Site admin</h1>
-        <p class="hint">${state.user
+        <p class="hint">${realUser()
           ? 'This account is not the site administrator.'
           : 'Sign in with the administrator account to continue.'}</p>
-        ${state.user ? `<a class="btn" href="${URL_DASH}">Back to the dashboard</a>`
+        ${realUser() ? `<a class="btn" href="${URL_DASH}">Back to the dashboard</a>`
           : '<button class="btn btn-primary" id="sa-signin">Sign in with Google</button>'}
       </div></div>`;
     bindTopbar();
@@ -746,7 +800,7 @@ function renderNew() {
           the draft takes noticeably longer. Off = default printing (artwork pinned in the cube
           is always respected either way).</p>
         </div>
-        ${state.user
+        ${realUser()
           ? '<button class="btn btn-primary btn-block" id="c-go">Create draft</button>'
           : `<p class="hint">Creating a draft requires an account, so you can manage it later from any device.</p>
              <button class="btn btn-primary btn-block" id="c-signin">Sign in with Google to create</button>`}
@@ -798,7 +852,7 @@ async function loadWatchedDrafts() {
   if (!el) return;
   const creds = allCreds();
   const rows = await Promise.all(Object.entries(watchedList()).map(async ([id]) => {
-    if (creds[id]?.pid || creds[id]?.adminSecret) { removeWatched(id); return null; } // now a participant
+    if (creds[id]?.pid) { removeWatched(id); return null; } // now a participant
     try {
       const snap = await getDoc(doc(db, 'rd-drafts', id));
       if (!snap.exists()) { removeWatched(id); return null; }
@@ -816,8 +870,8 @@ async function loadWatchedDrafts() {
 // One dashboard row: name, who joined, current pick + whose turn, settings.
 function dashRow(id, d, { admin = false, pid = null, ownerMode = false, watchMode = false } = {}) {
   const s = settingsOf(d);
-  if (!pid && state.user) {
-    pid = Object.entries(d.players || {}).find(([, p]) => p.uid === state.user.uid)?.[0] || null;
+  if (!pid && realUser()) {
+    pid = Object.entries(d.players || {}).find(([, p]) => p.uid === realUser().uid)?.[0] || null;
   }
   const playerNames = Object.values(d.players || {}).map((p) => p.name);
   let statusTxt = '', myTurn = false, sortKey = 0;
@@ -841,11 +895,8 @@ function dashRow(id, d, { admin = false, pid = null, ownerMode = false, watchMod
     `${s.singleRounds} single rounds`,
     s.reminderHours ? `${s.reminderHours}h reminder` : 'no reminder',
   ].join(' · ');
-  const href = watchMode
-    ? `${BASE}?d=${id}&w=1`
-    : ownerMode && d.adminSecret
-      ? `${BASE}?d=${id}&a=${encodeURIComponent(d.adminSecret)}`
-      : `${BASE}?d=${id}`;
+  const href = watchMode ? `${BASE}?d=${id}&w=1` : `${BASE}?d=${id}`;
+  admin = admin || (!!realUser() && d.adminUid === realUser().uid);
   const tag = watchMode
     ? '<span class="dash-as">watching</span>'
     : myName ? `<span class="dash-as">as ${esc(myName)}</span>` : '<span class="dash-as">not joined</span>';
@@ -898,15 +949,7 @@ async function loadOwnerDashboard() {
 }
 
 async function inboxCall(body) {
-  const token = await auth.currentUser.getIdToken();
-  const res = await fetch('/api/rd/inbox', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-    body: JSON.stringify(body || {}),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Inbox request failed');
-  return data;
+  return apiPost('/api/rd/inbox', body);
 }
 
 async function loadContactMessages() {
@@ -939,15 +982,15 @@ function topbar(title, sub = '', showBell = false) {
       title="${state.draft.status === 'lobby' ? 'Share the invite link' : 'Share a watcher link'}">${ICON_SHARE}</button>` : ''}
     ${showBell ? `<button class="iconbtn ${state.pushOn ? 'on' : ''}" id="bell-btn"
       title="${state.pushOn ? 'Notifications on — click to turn off' : 'Notifications off — click to enable'}">${state.pushOn ? ICON_BELL_ON : ICON_BELL_OFF}</button>` : ''}
-    ${state.user
-      ? `<button class="iconbtn userbtn" id="auth-btn" title="Signed in as ${esc(state.user.displayName || state.user.email)}">
-           ${state.user.photoURL
-             ? `<img class="avatar" src="${esc(state.user.photoURL)}" alt="" referrerpolicy="no-referrer">`
-             : `<span class="avatar avatar-letter">${esc((state.user.displayName || state.user.email || '?')[0].toUpperCase())}</span>`}
-           <span class="userbtn-name">${esc((state.user.displayName || state.user.email || '').split(' ')[0])}</span>
+    ${realUser()
+      ? `<button class="iconbtn userbtn" id="auth-btn" title="Signed in as ${esc(realUser().displayName || realUser().email)}">
+           ${realUser().photoURL
+             ? `<img class="avatar" src="${esc(realUser().photoURL)}" alt="" referrerpolicy="no-referrer">`
+             : `<span class="avatar avatar-letter">${esc((realUser().displayName || realUser().email || '?')[0].toUpperCase())}</span>`}
+           <span class="userbtn-name">${esc((realUser().displayName || realUser().email || '').split(' ')[0])}</span>
          </button>
          <div class="usermenu" id="user-menu" style="display:none">
-           <div class="usermenu-note">${esc(state.user.email || '')}</div>
+           <div class="usermenu-note">${esc(realUser().email || '')}</div>
            <a class="usermenu-item" href="${URL_DASH}">Dashboard</a>
            ${state.ownerOk ? `<a class="usermenu-item" href="${URL_ADMIN}">Site admin</a>` : ''}
            <button class="usermenu-item" id="menu-logout">Sign out</button>
@@ -982,7 +1025,7 @@ function bindTopbar() {
   $('#share-btn')?.addEventListener('click', shareCurrentLink);
   $('#bell-btn')?.addEventListener('click', togglePush);
   $('#auth-btn')?.addEventListener('click', async () => {
-    if (state.user) {
+    if (realUser()) {
       const menu = $('#user-menu');
       if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
       return;
@@ -993,7 +1036,7 @@ function bindTopbar() {
     } catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.message, true); }
   });
   $('#menu-logout')?.addEventListener('click', async () => {
-    if (!confirm(`Sign out ${state.user?.displayName || state.user?.email}?`)) return;
+    if (!confirm(`Sign out ${realUser()?.displayName || realUser()?.email}?`)) return;
     await signOut(auth);
     toast('Signed out.');
   });
@@ -1110,7 +1153,7 @@ async function resolveOldestImages(names, statusEl) {
 }
 
 async function createDraft() {
-  if (!state.user) { toast('Please sign in to create a draft.', true); return; }
+  if (!realUser()) { toast('Please sign in to create a draft.', true); return; }
   const btn = $('#c-go'), statusEl = $('#c-status');
   const name = $('#c-name').value.trim() || 'Rotisserie Draft';
   const players = Math.max(2, Math.min(16, parseInt($('#c-players').value, 10) || 8));
@@ -1161,17 +1204,16 @@ async function createDraft() {
     }
     statusEl.textContent = 'Creating draft…';
     const draftId = rid(12);
-    const adminSecret = rid(16);
     await setDoc(doc(db, 'rd-drafts', draftId), {
       name, cubeUrl, createdAt: Date.now(),
-      adminSecret, adminUid: state.user?.uid || null,
+      adminUid: realUser().uid,
       status: 'lobby',
       settings: { players, totalPicks, singleRounds, reminderHours },
-      players: {}, order: [], picks: [],
+      players: {}, uids: {}, order: [], picks: [],
       turnStartedAt: null, lastReminderAt: null,
     });
     await setDoc(doc(db, 'rd-drafts', draftId, 'meta', 'pool'), { cards: pool });
-    saveCreds(draftId, { adminSecret, draftName: name });
+    saveCreds(draftId, { draftName: name });
     await recordMembership(draftId, name, 'admin');
     location.href = `${BASE}?d=${draftId}`;
   } catch (e) {
@@ -1277,6 +1319,9 @@ async function joinDraft() {
   const pid = rid(10);
   const secret = rid(16);
   try {
+    await ensureAuthed();
+    const uid = auth.currentUser.uid;
+    const googleUid = realUser()?.uid || null;
     await runTransaction(db, async (t) => {
       const ref = doc(db, 'rd-drafts', state.draftId);
       const snap = await t.get(ref);
@@ -1287,13 +1332,18 @@ async function joinDraft() {
       if (Object.values(players).some((p) => p.name.toLowerCase() === name.toLowerCase())) {
         throw new Error('That name is taken.');
       }
-      t.update(ref, { [`players.${pid}`]: { name, uid: state.user?.uid || null, joinedAt: Date.now() } });
+      t.update(ref, {
+        [`players.${pid}`]: { name, uid: googleUid, joinedAt: Date.now() },
+        [`uids.${uid}`]: pid,
+      });
       t.set(doc(db, 'rd-drafts', state.draftId, 'private', pid), {
-        secret, queue: [], pushSubs: [], uid: state.user?.uid || null,
+        secret, queue: [], pushSubs: [], uid: googleUid, uids: { [uid]: true },
       });
     });
     saveCreds(state.draftId, { pid, secret, name });
+    state.seatBound = true;
     subscribeMyPriv();
+    subscribeChat();
     recordMembership();
     toast(`Joined as ${name}.`);
   } catch (e) { toast(e.message, true); }
@@ -1301,14 +1351,27 @@ async function joinDraft() {
 
 async function linkGoogle() {
   try {
-    if (!state.user) await signInWithPopup(auth, new GoogleAuthProvider());
-    if (!state.user) return;
-    await updateDoc(doc(db, 'rd-drafts', state.draftId), {
-      [`players.${myPid()}.uid`]: state.user.uid,
-    });
-    await updateDoc(doc(db, 'rd-drafts', state.draftId, 'private', myPid()), {
-      uid: state.user.uid,
-    });
+    await ensureAuthed();
+    const provider = new GoogleAuthProvider();
+    if (!realUser()) {
+      try {
+        // upgrade the anonymous session in place (uid is preserved)
+        await linkWithPopup(auth.currentUser, provider);
+      } catch (e) {
+        if (e.code === 'auth/credential-already-in-use' || e.code === 'auth/email-already-in-use') {
+          await signInWithPopup(auth, provider); // existing Google user: switch sessions
+        } else { throw e; }
+      }
+    }
+    const creds = allCreds()[state.draftId];
+    if (creds?.pid) {
+      // server persists the Google uid on the seat and binds this session
+      state.seatBound = false;
+      await apiPost('/api/rd/claim', {
+        draftId: state.draftId, pid: creds.pid, secret: creds.secret || null,
+      });
+      state.seatBound = true;
+    }
     recordMembership();
     toast('Google account linked — you can rejoin by signing in on any device.');
   } catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.message, true); }
@@ -1505,20 +1568,8 @@ async function doPick(cardId) {
   const me = myPid();
   if (!me) return;
   try {
-    await runTransaction(db, async (t) => {
-      const ref = doc(db, 'rd-drafts', state.draftId);
-      const snap = await t.get(ref);
-      const d = snap.data();
-      if (d.status !== 'active') throw new Error('The draft is not active.');
-      if (d.players?.[me]?.dropped) throw new Error('You were dropped from this draft.');
-      const v = draftView(d);
-      if (v.curPid !== me) throw new Error("It's not your turn.");
-      if (v.pickedIds.has(cardId)) throw new Error('That card was just picked!');
-      t.update(ref, {
-        picks: [...v.picks, { p: me, c: cardId, n: state.pool[cardId].n, at: Date.now() }],
-        turnStartedAt: Date.now(),
-      });
-    });
+    await ensureAuthed();
+    await apiPost('/api/rd/pick', { draftId: state.draftId, cardId });
     toast(`Picked ${state.pool[cardId].n}`);
     const inp = $('#pick-input'); if (inp) inp.value = '';
     closeModal();
@@ -2257,7 +2308,7 @@ function renderAdminPanelHtml() {
   const d = state.draft;
   const s = settingsOf(d);
   const players = Object.entries(d.players || {});
-  const adminLink = `${BASE}?d=${state.draftId}&a=${state.creds.adminSecret}`;
+
   return `<div id="admin-panel" class="adminbox">
     <h2>Admin</h2>
     ${d.status === 'lobby' ? `
@@ -2267,18 +2318,17 @@ function renderAdminPanelHtml() {
           ? `<button class="btn btn-sm ${players.length >= s.players ? 'btn-primary' : ''}" id="start-draft">Start draft (${players.length} players)</button>`
           : ''}
         <button class="btn btn-sm" id="add-bot">Add bot</button>
-        <button class="btn btn-sm" data-copy="${esc(adminLink)}" data-lbl="Admin link">Copy admin link</button>
       </div>
       <p class="hint">The draft only starts when you start it — seat order is randomized then.
-        Bots pick by CubeCobra ratings on their turn. The admin link makes another device
-        admin too.</p>
+        Bots pick by CubeCobra ratings on their turn. To administrate from another device,
+        sign in there with the same Google account.</p>
     </div>` : `
     <div class="adm-section">
       <div class="adm-actions">
-        <button class="btn btn-sm" data-copy="${esc(adminLink)}" data-lbl="Admin link">Copy admin link</button>
         <button class="btn btn-sm" data-copy="${esc(`${BASE}?d=${state.draftId}&w=1`)}" data-lbl="Watcher link">Copy watcher link</button>
       </div>
-      <p class="hint">The watcher link opens a read-only live view for spectators.</p>
+      <p class="hint">The watcher link opens a read-only live view for spectators. To
+        administrate from another device, sign in there with the same Google account.</p>
     </div>`}
     <div class="adm-section">
       <h3>Players</h3>
@@ -2399,13 +2449,7 @@ async function bindAdminPanel() {
     if (msg === null) return;
     b.disabled = true;
     try {
-      const res = await fetch('/api/rd/ping', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ draftId: state.draftId, pid, message: msg, secret: state.creds.adminSecret }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Ping failed');
+      await apiPost('/api/rd/ping', { draftId: state.draftId, pid, message: msg });
       toast(`Pinged ${name}`);
     } catch (e) { toast(e.message, true); }
     b.disabled = false;
@@ -2499,8 +2543,8 @@ async function deleteDraft() {
     const all = allCreds();
     delete all[state.draftId];
     localStorage.setItem('rd_creds', JSON.stringify(all));
-    if (state.user) {
-      await setDoc(doc(db, 'rd-users', state.user.uid), {
+    if (realUser()) {
+      await setDoc(doc(db, 'rd-users', realUser().uid), {
         drafts: { [state.draftId]: deleteField() },
       }, { merge: true });
     }
@@ -2535,14 +2579,19 @@ async function addBot() {
 
 // Remove a seat (bot or human) while in the lobby. Transactional so a
 // removal cannot race the lobby-full auto-start.
-async function removePlayerFromLobby(pid) {
+async function removePlayerFromLobby(pid, selfUid = null) {
   await runTransaction(db, async (t) => {
     const ref = doc(db, 'rd-drafts', state.draftId);
     const snap = await t.get(ref);
     const d = snap.data();
     if (!d || d.status !== 'lobby') throw new Error('The draft has already started.');
     if (!d.players?.[pid]) throw new Error('That player already left.');
-    t.update(ref, { [`players.${pid}`]: deleteField() });
+    const updates = { [`players.${pid}`]: deleteField() };
+    // security rules only let a player touch their own uid binding
+    for (const [u, boundPid] of Object.entries(d.uids || {})) {
+      if (boundPid === pid && (!selfUid || u === selfUid)) updates[`uids.${u}`] = deleteField();
+    }
+    t.update(ref, updates);
   });
   await deleteDoc(doc(db, 'rd-drafts', state.draftId, 'private', pid));
 }
@@ -2553,7 +2602,8 @@ async function leaveDraft() {
   if (!me) return;
   if (!confirm('Leave this draft? Your seat opens up again.')) return;
   try {
-    await removePlayerFromLobby(me);
+    await removePlayerFromLobby(me, auth.currentUser?.uid || null);
+    state.seatBound = false;
     state.unsubPriv?.();
     state.unsubPriv = null;
     state.myPriv = null;
@@ -2565,8 +2615,8 @@ async function leaveDraft() {
       localStorage.setItem('rd_creds', JSON.stringify(all));
       state.creds = all[state.draftId];
     }
-    if (state.user && !isAdmin()) {
-      await setDoc(doc(db, 'rd-users', state.user.uid), {
+    if (realUser() && !isAdmin()) {
+      await setDoc(doc(db, 'rd-users', realUser().uid), {
         drafts: { [state.draftId]: deleteField() },
       }, { merge: true });
     }
