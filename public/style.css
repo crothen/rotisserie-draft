@@ -414,6 +414,10 @@ textarea { min-height: 120px; resize: vertical; }
 .pick-row .mana { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .type-group { margin-bottom: 10px; }
 
+.newcta { text-align: center; }
+.newcta .btn { min-width: 280px; }
+@media (max-width: 480px) { .newcta .btn { width: 100%; min-width: 0; } }
+
 /* ---------- floating deck button ---------- */
 .fab {
   position: fixed; right: 16px; bottom: 86px; z-index: 45;

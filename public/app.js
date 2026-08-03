@@ -107,6 +107,21 @@ function openModal(html) {
   });
 }
 
+// localStorage watch list: { [draftId]: {name, at} } — drafts opened via watcher link
+function watchedList() {
+  try { return JSON.parse(localStorage.getItem('rd_watched') || '{}'); } catch { return {}; }
+}
+function saveWatched(draftId, name) {
+  const all = watchedList();
+  all[draftId] = { name: name || all[draftId]?.name || '', at: Date.now() };
+  localStorage.setItem('rd_watched', JSON.stringify(all));
+}
+function removeWatched(draftId) {
+  const all = watchedList();
+  delete all[draftId];
+  localStorage.setItem('rd_watched', JSON.stringify(all));
+}
+
 // localStorage creds: { [draftId]: {pid, secret, adminSecret, name, draftName} }
 function allCreds() {
   try { return JSON.parse(localStorage.getItem('rd_creds') || '{}'); } catch { return {}; }
@@ -225,7 +240,11 @@ function subscribeDraft() {
     const first = !state.draft;
     state.draft = snap.data();
     if (first) {
-      saveCreds(state.draftId, { draftName: state.draft.name });
+      const existing = allCreds()[state.draftId];
+      if (existing) saveCreds(state.draftId, { draftName: state.draft.name });
+      if (state.watcher && !existing?.pid && !existing?.adminSecret) {
+        saveWatched(state.draftId, state.draft.name);
+      }
       tryUidRejoin();
       recordMembership();
       subscribeMyPriv();
@@ -572,14 +591,18 @@ function renderDashboard() {
     ${topbar('Rotisserie Draft', 'Dashboard')}
     <div class="container">
       <div class="panel" id="dash-panel">
-        <div class="lobby-head" style="margin-bottom:10px">
-          <h2 style="margin:0">Your drafts</h2>
-          <a class="btn btn-sm btn-primary" href="${URL_NEW}">New draft</a>
-        </div>
+        <h2 style="margin-top:0">Your drafts</h2>
         <div id="dash">${state.user || Object.keys(allCreds()).length
           ? '<p class="hint">Loading…</p>'
-          : `<p class="hint">No drafts yet. Sign in with Google to see drafts from other devices, or <a href="${URL_NEW}">create one</a>.</p>`}</div>
+          : '<p class="hint">No drafts yet. Sign in with Google to see drafts from other devices, or create one below.</p>'}</div>
       </div>
+      <div class="panel newcta">
+        <a class="btn btn-primary btn-lg" href="${URL_NEW}">Start a new draft</a>
+      </div>
+      ${Object.keys(watchedList()).length ? `<div class="panel">
+        <h2 style="margin-top:0">Watching</h2>
+        <div id="dash-watch"><p class="hint">Loading…</p></div>
+      </div>` : ''}
       ${isOwner() ? `<div class="panel">
         <h2 style="margin-top:0">All drafts <span class="dash-as">site admin</span></h2>
         <div id="dash-all"><p class="hint">Loading…</p></div>
@@ -673,11 +696,33 @@ async function loadDashboard() {
   dashEl.innerHTML = list.length
     ? list.map((r) => r.html).join('')
     : '<p class="hint">No drafts yet. Create one below!</p>';
+  loadWatchedDrafts();
   loadOwnerDashboard();
 }
 
+// Drafts opened via watcher link, shown on the dashboard read-only.
+async function loadWatchedDrafts() {
+  const el = $('#dash-watch');
+  if (!el) return;
+  const creds = allCreds();
+  const rows = await Promise.all(Object.entries(watchedList()).map(async ([id]) => {
+    if (creds[id]?.pid || creds[id]?.adminSecret) { removeWatched(id); return null; } // now a participant
+    try {
+      const snap = await getDoc(doc(db, 'rd-drafts', id));
+      if (!snap.exists()) { removeWatched(id); return null; }
+      return dashRow(id, snap.data(), { watchMode: true });
+    } catch { return null; }
+  }));
+  const list = rows.filter(Boolean).sort((a, b) => a.sortKey - b.sortKey || b.at - a.at);
+  el.innerHTML = list.length ? list.map((r) => r.html).join('') : '<p class="hint">Nothing being watched.</p>';
+  $$('[data-unwatch]', el).forEach((b) => b.addEventListener('click', () => {
+    removeWatched(b.dataset.unwatch);
+    routeHome();
+  }));
+}
+
 // One dashboard row: name, who joined, current pick + whose turn, settings.
-function dashRow(id, d, { admin = false, pid = null, ownerMode = false } = {}) {
+function dashRow(id, d, { admin = false, pid = null, ownerMode = false, watchMode = false } = {}) {
   const s = settingsOf(d);
   if (!pid && state.user) {
     pid = Object.entries(d.players || {}).find(([, p]) => p.uid === state.user.uid)?.[0] || null;
@@ -704,20 +749,26 @@ function dashRow(id, d, { admin = false, pid = null, ownerMode = false } = {}) {
     `${s.singleRounds} single rounds`,
     s.reminderHours ? `${s.reminderHours}h reminder` : 'no reminder',
   ].join(' · ');
-  const href = ownerMode && d.adminSecret
-    ? `${BASE}?d=${id}&a=${encodeURIComponent(d.adminSecret)}`
-    : `${BASE}?d=${id}`;
+  const href = watchMode
+    ? `${BASE}?d=${id}&w=1`
+    : ownerMode && d.adminSecret
+      ? `${BASE}?d=${id}&a=${encodeURIComponent(d.adminSecret)}`
+      : `${BASE}?d=${id}`;
+  const tag = watchMode
+    ? '<span class="dash-as">watching</span>'
+    : myName ? `<span class="dash-as">as ${esc(myName)}</span>` : '<span class="dash-as">not joined</span>';
   return {
     id, sortKey, myTurn, at: d.createdAt || 0,
     html: `<div class="dash-row ${myTurn ? 'myturn' : ''}">
       <div class="dash-info">
         <div class="dash-name">${esc(d.name || id)}
           ${admin ? '<span class="admintag" title="you are the admin">admin</span>' : ''}
-          ${myName ? `<span class="dash-as">as ${esc(myName)}</span>` : '<span class="dash-as">not joined</span>'}</div>
+          ${tag}</div>
         <div class="dash-status">${statusTxt}</div>
         <div class="dash-meta">${meta}</div>
       </div>
-      <a class="btn btn-sm ${myTurn ? 'btn-primary' : ''}" href="${href}">${ownerMode ? 'Open as admin' : 'Open'}</a>
+      <a class="btn btn-sm ${myTurn ? 'btn-primary' : ''}" href="${href}">${watchMode ? 'Watch' : ownerMode ? 'Open as admin' : 'Open'}</a>
+      ${watchMode ? `<button class="btn btn-sm" data-unwatch="${esc(id)}" title="Remove from watching">✕</button>` : ''}
     </div>`,
   };
 }
