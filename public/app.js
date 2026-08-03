@@ -305,11 +305,9 @@ function render() {
 // HOME routing: landing page for visitors, app home for players
 // ----------------------------------------------------------------
 function routeHome() {
-  if (location.hash === '#about') return renderLanding();
   if (location.hash === '#contact') return renderContact();
   if (location.hash === '#app') return renderHome();
-  if (state.user || Object.keys(allCreds()).length) return renderHome();
-  renderLanding();
+  renderLanding(); // the landing is always the main page (incl. #about)
 }
 
 function landingHeader(page) {
@@ -334,7 +332,7 @@ function bindLandingChrome() {
     if (state.user) { location.hash = '#app'; return; }
     try {
       await signInWithPopup(auth, new GoogleAuthProvider());
-      location.hash = '#app';
+      // auth listener re-renders; signed-in landing shows ongoing drafts
     } catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.message, true); }
   }));
 }
@@ -344,9 +342,18 @@ function bindLandingChrome() {
 // ----------------------------------------------------------------
 function renderLanding() {
   const signedIn = !!state.user;
+  const hasDrafts = signedIn || Object.keys(allCreds()).length > 0;
   $('#app').innerHTML = `
     ${landingHeader('landing')}
     <div class="landing">
+      ${hasDrafts ? `
+      <section class="mydrafts" id="landing-drafts" style="display:none">
+        <div class="mydrafts-head">
+          <span class="eyebrow" style="margin:0">Your ongoing drafts</span>
+          <a href="#app">Open the app</a>
+        </div>
+        <div id="landing-drafts-list"></div>
+      </section>` : ''}
       <section class="hero">
         <p class="eyebrow">A slow draft format for Magic: The Gathering</p>
         <h1>Draft the whole cube.<br>Face up.</h1>
@@ -390,6 +397,52 @@ function renderLanding() {
       </footer>
     </div>`;
   bindLandingChrome();
+  loadLandingDrafts();
+}
+
+// Merge drafts known to this device (localStorage) with drafts recorded
+// under the signed-in account (rd-users/{uid}).
+async function collectDraftEntries() {
+  const entries = {};
+  for (const [id, c] of Object.entries(allCreds())) {
+    entries[id] = { name: c.draftName || id, admin: !!c.adminSecret, pid: c.pid || null };
+  }
+  if (state.user) {
+    try {
+      const snap = await getDoc(doc(db, 'rd-users', state.user.uid));
+      if (snap.exists()) {
+        for (const [id, info] of Object.entries(snap.data().drafts || {})) {
+          entries[id] = {
+            name: info.name || entries[id]?.name || id,
+            admin: entries[id]?.admin || info.role === 'admin',
+            pid: entries[id]?.pid || null,
+          };
+        }
+      }
+    } catch (e) { console.warn('rd-users load failed', e); }
+  }
+  return entries;
+}
+
+// Ongoing drafts strip at the top of the landing page.
+async function loadLandingDrafts() {
+  const listEl = $('#landing-drafts-list');
+  if (!listEl) return;
+  const entries = await collectDraftEntries();
+  const rows = await Promise.all(Object.entries(entries).map(async ([id, e]) => {
+    try {
+      const snap = await getDoc(doc(db, 'rd-drafts', id));
+      if (!snap.exists()) return null;
+      const d = snap.data();
+      if (d.status === 'done') return null;
+      return dashRow(id, d, { admin: e.admin, pid: e.pid });
+    } catch { return null; }
+  }));
+  const list = rows.filter(Boolean).sort((a, b) => a.sortKey - b.sortKey || b.at - a.at).slice(0, 6);
+  if (!list.length) return;
+  listEl.innerHTML = list.map((r) => r.html).join('');
+  const sec = $('#landing-drafts');
+  if (sec) sec.style.display = 'block';
 }
 
 // ----------------------------------------------------------------
@@ -520,24 +573,7 @@ function renderHome() {
 async function loadDashboard() {
   const dashEl = $('#dash');
   if (!dashEl) return;
-  const entries = {};
-  for (const [id, c] of Object.entries(allCreds())) {
-    entries[id] = { name: c.draftName || id, admin: !!c.adminSecret, pid: c.pid || null };
-  }
-  if (state.user) {
-    try {
-      const snap = await getDoc(doc(db, 'rd-users', state.user.uid));
-      if (snap.exists()) {
-        for (const [id, info] of Object.entries(snap.data().drafts || {})) {
-          entries[id] = {
-            name: info.name || entries[id]?.name || id,
-            admin: entries[id]?.admin || info.role === 'admin',
-            pid: entries[id]?.pid || null,
-          };
-        }
-      }
-    } catch (e) { console.warn('dashboard rd-users load failed', e); }
-  }
+  const entries = await collectDraftEntries();
   if (!Object.keys(entries).length) {
     dashEl.innerHTML = '<p class="hint">No drafts yet. Sign in with Google to see drafts from other devices, or create one below.</p>';
     return;
