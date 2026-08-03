@@ -279,6 +279,42 @@ async function tryUidRejoin() {
 }
 
 // ----------------------------------------------------------------
+// Tab indicator: green favicon dot + title when it's my turn,
+// orange when I'm the next player up, plain icon otherwise.
+// ----------------------------------------------------------------
+let tabIndicator;
+async function setTabIndicator(mode) { // 'mine' | 'next' | null
+  if (mode === tabIndicator) return;
+  tabIndicator = mode;
+  const link = document.querySelector('link[rel="icon"]');
+  const name = state.draft?.name || 'Rotisserie Draft';
+  if (!mode) {
+    if (link) link.href = 'icon.svg';
+    document.title = state.draft ? `${name} — Rotisserie Draft` : 'Rotisserie Draft';
+    return;
+  }
+  document.title = (mode === 'mine' ? 'YOUR TURN · ' : 'Up next · ') + name;
+  if (!link) return;
+  try {
+    const img = new Image();
+    img.src = 'icon.svg';
+    await img.decode();
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 64;
+    const ctx = cv.getContext('2d');
+    ctx.drawImage(img, 0, 0, 64, 64);
+    ctx.beginPath();
+    ctx.arc(45, 19, 15, 0, Math.PI * 2);
+    ctx.fillStyle = mode === 'mine' ? '#22c55e' : '#f0a020';
+    ctx.fill();
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = '#12141c';
+    ctx.stroke();
+    link.href = cv.toDataURL('image/png');
+  } catch { /* keep the default icon */ }
+}
+
+// ----------------------------------------------------------------
 // Focus preservation across re-renders
 // ----------------------------------------------------------------
 function render() {
@@ -865,6 +901,7 @@ function renderLobby() {
   const inviteLink = `${BASE}?d=${state.draftId}`;
   const privLink = joined ? `${BASE}?d=${state.draftId}&p=${myPid()}&s=${state.creds.secret}` : '';
 
+  setTabIndicator(null);
   const seats = [];
   for (const [pid, p] of players) {
     const me = pid === myPid();
@@ -991,6 +1028,19 @@ function renderDraft() {
   const v = draftView(d);
   const me = myPid();
   const myTurn = v.curPid && v.curPid === me;
+
+  let tabMode = null;
+  if (!v.done && me) {
+    if (myTurn) tabMode = 'mine';
+    else {
+      // am I the next distinct player after the current turn?
+      const curIdx = v.seq[v.picks.length];
+      let j = v.picks.length;
+      while (j < v.seq.length && v.seq[j] === curIdx) j++;
+      if (j < v.seq.length && v.order[v.seq[j]] === me) tabMode = 'next';
+    }
+  }
+  setTabIndicator(tabMode);
   if (!state.selPlayer || !d.players[state.selPlayer]) state.selPlayer = me || v.order[0];
 
   const tabs = [
