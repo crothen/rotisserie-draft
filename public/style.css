@@ -415,8 +415,13 @@ textarea { min-height: 120px; resize: vertical; }
 .type-group { margin-bottom: 10px; }
 
 .newcta { text-align: center; }
-.newcta .btn { min-width: 280px; }
-@media (max-width: 480px) { .newcta .btn { width: 100%; min-width: 0; } }
+.btn-cta {
+  min-width: 340px; padding: 18px 36px; font-size: 17px; font-weight: 700;
+  background: #7cc4f5; border-color: #7cc4f5; color: #0d1a24;
+  letter-spacing: 0.01em;
+}
+.btn-cta:hover { background: #97d2fb; border-color: #97d2fb; }
+@media (max-width: 480px) { .btn-cta { width: 100%; min-width: 0; } }
 
 /* ---------- floating deck button ---------- */
 .fab {

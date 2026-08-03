@@ -597,7 +597,7 @@ function renderDashboard() {
           : '<p class="hint">No drafts yet. Sign in with Google to see drafts from other devices, or create one below.</p>'}</div>
       </div>
       <div class="panel newcta">
-        <a class="btn btn-primary btn-lg" href="${URL_NEW}">Start a new draft</a>
+        <a class="btn btn-cta" href="${URL_NEW}">Start a new draft</a>
       </div>
       ${Object.keys(watchedList()).length ? `<div class="panel">
         <h2 style="margin-top:0">Watching</h2>
