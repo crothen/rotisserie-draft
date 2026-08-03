@@ -11,6 +11,11 @@ import {
 const VAPID_PUBLIC =
   'BBwWu4Duu4THhbcxb1fJofvfaWQgu13WHe6OnvDkHA23yU7fcCfpe-MShsMtsqOc84K_ruonzvVh_Z0M12zsGqY';
 const BASE = location.origin + location.pathname;
+
+const ICON_BELL_ON =
+  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>';
+const ICON_BELL_OFF =
+  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
 // SHA-256 of the site owner's email — identifies the owner in public
 // code without publishing the address itself.
 const OWNER_HASH = '91fa8e4aaa27cba1007cef4cce055e11b2b60e9c651effd795a8a6f5a9a82fc8';
@@ -75,7 +80,7 @@ function toast(msg, err = false) {
 async function copyText(text, label = 'Link') {
   try {
     await navigator.clipboard.writeText(text);
-    toast(`${label} copied 📋`);
+    toast(`${label} copied`);
   } catch {
     prompt('Copy this:', text);
   }
@@ -301,9 +306,37 @@ function render() {
 // ----------------------------------------------------------------
 function routeHome() {
   if (location.hash === '#about') return renderLanding();
+  if (location.hash === '#contact') return renderContact();
   if (location.hash === '#app') return renderHome();
   if (state.user || Object.keys(allCreds()).length) return renderHome();
   renderLanding();
+}
+
+function landingHeader(page) {
+  return `<header class="landing-header">
+    <a class="wordmark" href="#about">Rotisserie Draft</a>
+    <nav class="landing-nav">
+      ${page === 'landing'
+        ? '<a href="#" data-scroll="how">How it works</a>'
+        : '<a href="#about">How it works</a>'}
+      <a href="#contact">Contact</a>
+      <button class="btn btn-sm landing-signin">${state.user ? 'Open the app' : 'Sign in'}</button>
+    </nav>
+  </header>`;
+}
+
+function bindLandingChrome() {
+  $$('[data-scroll]').forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    $(`#sec-${a.dataset.scroll}`)?.scrollIntoView({ behavior: 'smooth' });
+  }));
+  $$('.landing-signin').forEach((b) => b.addEventListener('click', async () => {
+    if (state.user) { location.hash = '#app'; return; }
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider());
+      location.hash = '#app';
+    } catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.message, true); }
+  }));
 }
 
 // ----------------------------------------------------------------
@@ -312,14 +345,7 @@ function routeHome() {
 function renderLanding() {
   const signedIn = !!state.user;
   $('#app').innerHTML = `
-    <header class="landing-header">
-      <a class="wordmark" href="#about">Rotisserie Draft</a>
-      <nav class="landing-nav">
-        <a href="#" data-scroll="how">How it works</a>
-        <a href="#" data-scroll="contact">Contact</a>
-        <button class="btn btn-sm landing-signin">${signedIn ? 'Open the app' : 'Sign in'}</button>
-      </nav>
-    </header>
+    ${landingHeader('landing')}
     <div class="landing">
       <section class="hero">
         <p class="eyebrow">A slow draft format for Magic: The Gathering</p>
@@ -331,7 +357,8 @@ function renderLanding() {
           <a class="btn btn-primary btn-lg" href="#app">Start a draft</a>
           <button class="btn btn-lg landing-signin">${signedIn ? 'Open the app' : 'Sign in or register'}</button>
         </div>
-        <p class="finehint">Free and without ads. Players join with a link. An account is optional.</p>
+        <p class="finehint">Free and without ads. Creating a draft requires a Google account.
+        Players join with a link, no account needed.</p>
       </section>
 
       <section class="how" id="sec-how">
@@ -356,9 +383,27 @@ function renderLanding() {
         </div>
       </section>
 
-      <section class="contact2" id="sec-contact">
+      <footer class="landing-footer">
+        <span>Built for slow drafting with friends. No ads. No tracking.</span>
+        <a href="#contact">Contact</a>
+        <a href="#app">Open the app</a>
+      </footer>
+    </div>`;
+  bindLandingChrome();
+}
+
+// ----------------------------------------------------------------
+// CONTACT — separate page
+// ----------------------------------------------------------------
+function renderContact() {
+  $('#app').innerHTML = `
+    ${landingHeader('contact')}
+    <div class="landing">
+      <section class="contact2">
         <p class="eyebrow">Contact</p>
-        <p class="lead2">Questions, bug reports, or ideas? Send a message.</p>
+        <h1 class="pagetitle">Get in touch</h1>
+        <p class="lead2">Questions, bug reports, or ideas? Send a message and you will hear
+        back soon.</p>
         <div class="row">
           <div class="field"><label>Name (optional)</label>
             <input type="text" id="ct-name" maxlength="120"></div>
@@ -370,23 +415,13 @@ function renderLanding() {
           <textarea id="ct-msg" maxlength="3000"></textarea></div>
         <button class="btn btn-primary" id="ct-send">Send message</button>
       </section>
-
       <footer class="landing-footer">
         <span>Built for slow drafting with friends. No ads. No tracking.</span>
+        <a href="#about">About</a>
         <a href="#app">Open the app</a>
       </footer>
     </div>`;
-  $$('[data-scroll]').forEach((a) => a.addEventListener('click', (e) => {
-    e.preventDefault();
-    $(`#sec-${a.dataset.scroll}`)?.scrollIntoView({ behavior: 'smooth' });
-  }));
-  $$('.landing-signin').forEach((b) => b.addEventListener('click', async () => {
-    if (state.user) { location.hash = '#app'; return; }
-    try {
-      await signInWithPopup(auth, new GoogleAuthProvider());
-      location.hash = '#app';
-    } catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.message, true); }
-  }));
+  bindLandingChrome();
   $('#ct-send').addEventListener('click', async () => {
     const btn = $('#ct-send');
     const message = $('#ct-msg').value.trim();
@@ -420,17 +455,17 @@ function renderHome() {
     ${topbar('Rotisserie Draft', 'MTG snake draft from a shared pool')}
     <div class="container">
       <div class="panel" id="dash-panel">
-        <h2 style="margin-top:0">📋 Your drafts</h2>
+        <h2 style="margin-top:0">Your drafts</h2>
         <div id="dash">${state.user || Object.keys(allCreds()).length
           ? '<p class="hint">Loading…</p>'
           : '<p class="hint">No drafts yet. Sign in with Google to see drafts from other devices, or create one below.</p>'}</div>
       </div>
       ${isOwner() ? `<div class="panel">
-        <h2 style="margin-top:0">🛠 All drafts <span class="dash-as">site admin</span></h2>
+        <h2 style="margin-top:0">All drafts <span class="dash-as">site admin</span></h2>
         <div id="dash-all"><p class="hint">Loading…</p></div>
       </div>` : ''}
       <div class="panel">
-        <h1>🍗 New Rotisserie Draft</h1>
+        <h1>New Rotisserie Draft</h1>
         <p class="hint">Everyone sees the whole pool and drafts one card at a time, snake order
         (1→8, 8→1, …). After a while players pick 2 cards per turn.</p>
         <div class="field"><label>Draft name</label>
@@ -453,11 +488,14 @@ function renderHome() {
         </div>
         <p class="hint">Single-pick rounds: how many rounds are 1 card per turn before switching
         to 2 cards per turn. Reminder 0 = off.</p>
-        <button class="btn btn-primary btn-block" id="c-go">Create draft</button>
+        ${state.user
+          ? '<button class="btn btn-primary btn-block" id="c-go">Create draft</button>'
+          : `<p class="hint">Creating a draft requires an account, so you can manage it later from any device.</p>
+             <button class="btn btn-primary btn-block" id="c-signin">Sign in with Google to create</button>`}
         <p class="hint" id="c-status"></p>
       </div>
       ${isOwner() ? `<div class="panel">
-        <h2 style="margin-top:0">📨 Contact messages <span class="dash-as">site admin</span></h2>
+        <h2 style="margin-top:0">Contact messages <span class="dash-as">site admin</span></h2>
         <div id="dash-contact"><p class="hint">Loading…</p></div>
       </div>` : ''}
       <p class="hint" style="text-align:center"><a href="#about">About & contact</a></p>
@@ -467,7 +505,13 @@ function renderHome() {
     $('#c-text').style.display = e.target.checked ? 'block' : 'none';
     $('#c-cube').disabled = e.target.checked;
   });
-  $('#c-go').addEventListener('click', createDraft);
+  $('#c-go')?.addEventListener('click', createDraft);
+  $('#c-signin')?.addEventListener('click', async () => {
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider());
+      // auth listener re-renders with the create button enabled
+    } catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.message, true); }
+  });
   loadDashboard();
 }
 
@@ -521,21 +565,21 @@ function dashRow(id, d, { admin = false, pid = null, ownerMode = false } = {}) {
   const playerNames = Object.values(d.players || {}).map((p) => p.name);
   let statusTxt = '', myTurn = false, sortKey = 0;
   if (d.status === 'lobby') {
-    statusTxt = `🕐 Lobby — waiting for players (${playerNames.length}/${s.players})`;
+    statusTxt = `Lobby — waiting for players (${playerNames.length}/${s.players})`;
     sortKey = 2;
   } else if (d.status === 'done') {
-    statusTxt = '🏁 Complete';
+    statusTxt = 'Complete';
     sortKey = 3;
   } else {
     const v = draftView(d);
     const curName = d.players?.[v.curPid]?.name || '?';
     myTurn = !!pid && v.curPid === pid;
-    statusTxt = `Pick ${v.picks.length + 1}/${v.seq.length} — ${myTurn ? '🎯 YOUR turn!' : `${esc(curName)}'s turn`}`;
+    statusTxt = `Pick ${v.picks.length + 1}/${v.seq.length} — ${myTurn ? 'YOUR turn' : `${esc(curName)}'s turn`}`;
     sortKey = myTurn ? 0 : 1;
   }
   const myName = pid ? d.players?.[pid]?.name : null;
   const meta = [
-    `👥 ${playerNames.length}/${s.players}: ${playerNames.map(esc).join(', ') || '—'}`,
+    `${playerNames.length}/${s.players} players: ${playerNames.map(esc).join(', ') || '—'}`,
     `${s.totalPicks} cards each`,
     `${s.singleRounds} single rounds`,
     s.reminderHours ? `${s.reminderHours}h reminder` : 'no reminder',
@@ -548,12 +592,12 @@ function dashRow(id, d, { admin = false, pid = null, ownerMode = false } = {}) {
     html: `<div class="dash-row ${myTurn ? 'myturn' : ''}">
       <div class="dash-info">
         <div class="dash-name">${esc(d.name || id)}
-          ${admin ? '<span title="you are the admin">👑</span>' : ''}
+          ${admin ? '<span class="admintag" title="you are the admin">admin</span>' : ''}
           ${myName ? `<span class="dash-as">as ${esc(myName)}</span>` : '<span class="dash-as">not joined</span>'}</div>
         <div class="dash-status">${statusTxt}</div>
         <div class="dash-meta">${meta}</div>
       </div>
-      <a class="btn btn-sm ${myTurn ? 'btn-primary' : ''}" href="${href}">${ownerMode ? 'Open 👑' : 'Open'}</a>
+      <a class="btn btn-sm ${myTurn ? 'btn-primary' : ''}" href="${href}">${ownerMode ? 'Open as admin' : 'Open'}</a>
     </div>`,
   };
 }
@@ -612,10 +656,10 @@ async function loadContactMessages() {
 
 function topbar(title, sub = '', showBell = false) {
   return `<div class="topbar">
-    <a class="logo" href="${BASE}">🍗</a>
+    <a class="logo" href="${BASE}">RD</a>
     <div class="title">${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ''}</div>
     ${showBell ? `<button class="iconbtn ${state.pushOn ? 'on' : ''}" id="bell-btn"
-      title="${state.pushOn ? 'Notifications on — click to turn off' : 'Notifications off — click to enable'}">${state.pushOn ? '🔔' : '🔕'}</button>` : ''}
+      title="${state.pushOn ? 'Notifications on — click to turn off' : 'Notifications off — click to enable'}">${state.pushOn ? ICON_BELL_ON : ICON_BELL_OFF}</button>` : ''}
     ${state.user
       ? `<button class="iconbtn userbtn" id="auth-btn" title="Signed in as ${esc(state.user.displayName || state.user.email)}">
            ${state.user.photoURL
@@ -625,8 +669,8 @@ function topbar(title, sub = '', showBell = false) {
          </button>
          <div class="usermenu" id="user-menu" style="display:none">
            <div class="usermenu-note">${esc(state.user.email || '')}</div>
-           <a class="usermenu-item" href="${BASE}">📋 My Drafts</a>
-           <button class="usermenu-item" id="menu-logout">🚪 Sign out</button>
+           <a class="usermenu-item" href="${BASE}">My Drafts</a>
+           <button class="usermenu-item" id="menu-logout">Sign out</button>
          </div>`
       : `<button class="iconbtn" id="auth-btn" title="Sign in with Google">Sign in</button>`}
   </div>`;
@@ -641,7 +685,7 @@ function bindTopbar() {
     }
     try {
       await signInWithPopup(auth, new GoogleAuthProvider());
-      toast('Signed in ✅');
+      toast('Signed in.');
     } catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.message, true); }
   });
   $('#menu-logout')?.addEventListener('click', async () => {
@@ -710,6 +754,7 @@ async function resolveScryfall(names, statusEl) {
 }
 
 async function createDraft() {
+  if (!state.user) { toast('Please sign in to create a draft.', true); return; }
   const btn = $('#c-go'), statusEl = $('#c-status');
   const name = $('#c-name').value.trim() || 'Rotisserie Draft';
   const players = Math.max(2, Math.min(16, parseInt($('#c-players').value, 10) || 8));
@@ -790,7 +835,7 @@ function renderLobby() {
           ${s.reminderHours ? `${s.reminderHours}h pick reminder` : 'no reminder'}
           ${d.cubeUrl ? ` · <a href="${esc(d.cubeUrl)}" target="_blank" rel="noopener">cube ↗</a>` : ''}</p>
         <div class="chips" style="margin:10px 0">
-          ${players.map(([pid, p]) => `<span class="chip ${pid === myPid() ? 'active' : ''}">${esc(p.name)}${p.uid ? ' ✅' : ''}</span>`).join('') || '<span class="hint">Nobody here yet…</span>'}
+          ${players.map(([pid, p]) => `<span class="chip ${pid === myPid() ? 'active' : ''}">${esc(p.name)}</span>`).join('') || '<span class="hint">Nobody here yet…</span>'}
         </div>
         <p class="hint">The draft starts automatically (random order) when ${s.players} players have joined.</p>
         ${!joined ? `
@@ -798,15 +843,15 @@ function renderLobby() {
             <input type="text" id="j-name" maxlength="24" placeholder="Player name"></div>
           <button class="btn btn-primary btn-block" id="j-go">Join draft</button>
         ` : `
-          <p style="margin:8px 0">You're in as <b>${esc(d.players[myPid()].name)}</b> 🎉</p>
+          <p style="margin:8px 0">You're in as <b>${esc(d.players[myPid()].name)}</b></p>
           <div class="link-row"><span class="lbl">Your private link</span>
             <span class="url">${esc(privLink)}</span>
             <button class="btn btn-sm" data-copy="${esc(privLink)}" data-lbl="Private link">Copy</button></div>
           <p class="hint">Open your private link on any device to rejoin — or link your Google
             account below and just sign in.</p>
           <div class="row" style="margin-top:8px">
-            ${!d.players[myPid()].uid ? `<button class="btn" id="link-google">🔗 Link Google account</button>` : `<span class="chip">✅ Google linked</span>`}
-            <button class="btn" id="push-btn">${state.pushOn ? '🔔 Notifications on — turn off' : '🔕 Enable notifications'}</button>
+            ${!d.players[myPid()].uid ? `<button class="btn" id="link-google">Link Google account</button>` : `<span class="chip">Google linked</span>`}
+            <button class="btn" id="push-btn">${state.pushOn ? 'Turn notifications off' : 'Enable notifications'}</button>
           </div>
         `}
       </div>
@@ -851,7 +896,7 @@ async function joinDraft() {
     saveCreds(state.draftId, { pid, secret, name });
     subscribeMyPriv();
     recordMembership();
-    toast(`Joined as ${name}!`);
+    toast(`Joined as ${name}.`);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -881,12 +926,12 @@ function renderDraft() {
   if (!state.selPlayer || !d.players[state.selPlayer]) state.selPlayer = me || v.order[0];
 
   const tabs = [
-    ['pool', '🃏 Pool'],
-    ['grid', '📊 Grid'],
-    ['players', '👥 Decks'],
-    ['queue', `⏳ Queue${state.myPriv?.queue?.length ? ` (${state.myPriv.queue.length})` : ''}`],
+    ['pool', 'Pool'],
+    ['grid', 'Grid'],
+    ['players', 'Decks'],
+    ['queue', `Queue${state.myPriv?.queue?.length ? ` (${state.myPriv.queue.length})` : ''}`],
   ];
-  if (isAdmin()) tabs.push(['admin', '👑 Admin']);
+  if (isAdmin()) tabs.push(['admin', 'Admin']);
 
   $('#app').innerHTML = `
     ${topbar(d.name, v.done ? 'Draft complete' : 'Drafting…', !!me)}
@@ -907,7 +952,7 @@ function renderDraft() {
 function turnBannerHtml(v, me) {
   const d = state.draft;
   if (v.done) {
-    return `<div class="turn-banner"><div class="big">🏁 Draft complete!</div>
+    return `<div class="turn-banner"><div class="big">Draft complete</div>
       <div class="sub">Every player drafted ${v.s.totalPicks} cards. Check the decks tab.</div></div>`;
   }
   const cur = d.players[v.curPid]?.name || '?';
@@ -927,9 +972,9 @@ function turnBannerHtml(v, me) {
   }
   return `<div class="turn-banner ${myTurn ? 'mine' : ''}">
     <div class="big">${myTurn
-      ? `🎯 Your turn — pick ${doubleTurn ? '2 cards' : 'a card'}!`
+      ? `Your turn — pick ${doubleTurn ? '2 cards' : 'a card'}`
       : `Waiting for <b>${esc(cur)}</b>${doubleTurn ? ' (2 picks)' : ''}${waiting >= 2 ? ` · ${waiting}h` : ''}`}</div>
-    ${stall ? `<div class="sub stall">⚠️ <b>${esc(stall.n)}</b> from your queue was picked by
+    ${stall ? `<div class="sub stall"><b>${esc(stall.n)}</b> from your queue was picked by
       <b>${esc(stall.tb || 'someone')}</b> — dismiss it in the queue tab or just pick another card.</div>` : ''}
     <div class="sub">Pick ${curCount + 1}/${v.s.totalPicks} for ${esc(cur)} · ${v.picks.length}/${v.seq.length} total
       ${nextPid && nextPid !== v.curPid ? ` · up next: ${esc(d.players[nextPid]?.name || '?')}` : ''}</div>
@@ -944,7 +989,7 @@ function pickbarHtml(myTurn) {
       <div class="ac-list" id="ac-list" style="display:none"></div>
     </div>
     <button class="btn btn-primary" id="pick-btn" ${myTurn ? '' : 'disabled'}>Pick</button>
-    <button class="btn" id="queue-btn" title="Add to queue">+⏳</button>
+    <button class="btn" id="queue-btn" title="Add to queue">Queue</button>
   </div></div>`;
 }
 
@@ -1041,7 +1086,7 @@ async function doPick(cardId) {
         turnStartedAt: Date.now(),
       });
     });
-    toast(`Picked ${state.pool[cardId].n} ✅`);
+    toast(`Picked ${state.pool[cardId].n}`);
     const inp = $('#pick-input'); if (inp) inp.value = '';
     closeModal();
   } catch (e) { toast(e.message, true); }
@@ -1058,7 +1103,7 @@ async function addToQueue(cardId) {
   await updateDoc(doc(db, 'rd-drafts', state.draftId, 'private', me), {
     queue: arrayUnion({ c: cardId, n: state.pool[cardId].n }),
   });
-  toast(`${state.pool[cardId].n} added to queue ⏳`);
+  toast(`${state.pool[cardId].n} added to queue`);
   closeModal();
 }
 
@@ -1115,10 +1160,10 @@ function gridHtml(v) {
       else if (!pick && curG < v.seq.length && v.seq[g] === v.seq[curG] &&
                (g === curG + 1) && v.seq[curG + 1] === v.seq[curG]) cls.push('cur2');
       if (!pick) {
-        return `<td class="${cls.join(' ')}" title="pick ${g + 1} of ${v.seq.length}">${g === curG ? '👉' : '·'}</td>`;
+        return `<td class="${cls.join(' ')}" title="pick ${g + 1} of ${v.seq.length}">${g === curG ? '▸' : '·'}</td>`;
       }
       cls.push('filled');
-      return `<td class="${cls.join(' ')}" data-card="${pick.c}" title="pick ${g + 1}: ${esc(pick.n)}">${esc(pick.n)}${pick.auto ? ' 🤖' : ''}</td>`;
+      return `<td class="${cls.join(' ')}" data-card="${pick.c}" title="pick ${g + 1}: ${esc(pick.n)}">${esc(pick.n)}${pick.auto ? ' <span class="automark" title="auto pick">A</span>' : ''}</td>`;
     });
     rows.push(`<tr class="${isDbl ? (pairFirst ? 'dbl-a' : 'dbl-b') : ''}">
       <td class="rowlbl">${slot + 1} <span class="dir">${dir}</span>${pairFirst ? '<span class="x2">×2</span>' : ''}</td>
@@ -1130,7 +1175,7 @@ function gridHtml(v) {
     <div class="grid-wrap" id="grid-wrap"><table class="pick-grid">
       <thead><tr><th class="rowlbl">#</th>
         ${v.order.map((pid, pi) => `<th class="${pi === curPi ? 'curcol' : ''}">
-          ${pi === curPi && !v.done ? '🎯 ' : ''}${esc(d.players[pid]?.name || '?')}
+          ${esc(d.players[pid]?.name || '?')}
           <div class="thsub">${v.picks.filter((p) => p.p === pid).length}/${v.s.totalPicks}</div></th>`).join('')}
       </tr></thead>
       <tbody>${rows.join('')}</tbody>
@@ -1186,7 +1231,7 @@ function bindGrid() {
 }
 
 // ---------- pool ----------
-const COLOR_FILTERS = [['W', '⚪'], ['U', '🔵'], ['B', '⚫'], ['R', '🔴'], ['G', '🟢'], ['M', '🌈'], ['C', '💠']];
+const COLOR_FILTERS = [['W', 'W'], ['U', 'U'], ['B', 'B'], ['R', 'R'], ['G', 'G'], ['M', 'M'], ['C', 'C']];
 const TYPE_FILTERS = ['Creature', 'Instant', 'Sorcery', 'Artifact', 'Enchantment', 'Planeswalker', 'Land'];
 
 function filterPool(v) {
@@ -1233,14 +1278,14 @@ function poolHtml(v) {
   return `
     <div class="pool-controls">
       <div class="row2">
-        <input type="text" id="pool-search" placeholder="🔍 Search name or type…" value="${esc(f.search)}">
+        <input type="text" id="pool-search" placeholder="Search name or type…" value="${esc(f.search)}">
         <select id="pool-sort">
           ${[['pool', 'Cube order'], ['name', 'Name'], ['cmc', 'Mana value'], ['color', 'Color']]
             .map(([val, lbl]) => `<option value="${val}" ${f.sort === val ? 'selected' : ''}>${lbl}</option>`).join('')}
         </select>
       </div>
       <div class="row2">
-        ${COLOR_FILTERS.map(([c, icon]) => `<button class="mini-chip ${f.colors.has(c) ? 'active' : ''}" data-color="${c}">${icon}</button>`).join('')}
+        ${COLOR_FILTERS.map(([c, icon]) => `<button class="mini-chip ${f.colors.has(c) ? 'active' : ''}" data-color="${c}" title="${({W:'White',U:'Blue',B:'Black',R:'Red',G:'Green',M:'Multicolor',C:'Colorless'})[c]}">${icon}</button>`).join('')}
         <label class="checkline"><input type="checkbox" id="hide-picked" ${f.hidePicked ? 'checked' : ''}> hide picked</label>
       </div>
       <div class="row2">
@@ -1257,7 +1302,7 @@ function poolHtml(v) {
           ${c.img
             ? `<img src="${esc(c.img.replace('/normal/', '/small/'))}" alt="${esc(c.n)}" loading="lazy">`
             : `<div class="noimg">${esc(c.n)}</div>`}
-          ${queueIds.has(i) && !picked ? '<span class="q-tag">⏳</span>' : ''}
+          ${queueIds.has(i) && !picked ? '<span class="q-tag" title="in your queue">Q</span>' : ''}
           ${picked ? `<span class="picked-tag">${esc(picker || '?')}</span>` : ''}
         </div>`;
       }).join('')}
@@ -1296,12 +1341,12 @@ function openCardModal(cardId) {
   openModal(`
     ${c.img ? `<img class="bigcard" src="${esc(c.img)}" alt="${esc(c.n)}">` : `<h2>${esc(c.n)}</h2><p class="status-line">${esc(c.t)} ${esc(c.m)}</p>`}
     <div class="status-line">${picked
-      ? `🔒 Picked by <b>${esc(picker || '?')}</b> (pick ${v.picks.indexOf(pick) + 1})`
-      : '✅ Available'}</div>
+      ? `Picked by <b>${esc(picker || '?')}</b> (pick ${v.picks.indexOf(pick) + 1})`
+      : 'Available'}</div>
     <div class="modal-actions">
       ${!picked && me && !v.done ? `
         <button class="btn btn-primary" id="m-pick" ${myTurn ? '' : 'disabled'}>${myTurn ? 'Pick now' : 'Not your turn'}</button>
-        <button class="btn" id="m-queue" ${inQueue ? 'disabled' : ''}>${inQueue ? 'In queue ⏳' : 'Add to queue'}</button>` : ''}
+        <button class="btn" id="m-queue" ${inQueue ? 'disabled' : ''}>${inQueue ? 'In queue' : 'Add to queue'}</button>` : ''}
       <button class="btn" id="m-close">Close</button>
     </div>`);
   $('#m-pick')?.addEventListener('click', () => doPick(cardId));
@@ -1343,7 +1388,7 @@ function playersHtml(v) {
     </div>
     <div class="row2" style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
       <label class="checkline"><input type="checkbox" id="group-type" ${state.groupByType ? 'checked' : ''}> group by type</label>
-      <button class="btn btn-sm" id="export-deck">⬇ Export list</button>
+      <button class="btn btn-sm" id="export-deck">Export list</button>
     </div>
     ${listHtml}`;
 }
@@ -1352,7 +1397,7 @@ function pickRowHtml(p) {
   const c = state.pool[p.c] || { n: p.n, m: '', t: '' };
   return `<div class="pick-row" data-card="${p.c}">
     <span class="num">${p.gi + 1}</span>
-    <span>${esc(c.n)}</span>${p.auto ? ' <span title="auto-picked from queue">🤖</span>' : ''}
+    <span>${esc(c.n)}</span>${p.auto ? ' <span class="automark" title="auto-picked from queue">A</span>' : ''}
     <span class="mana">${esc(c.m)}</span>
   </div>`;
 }
@@ -1384,21 +1429,21 @@ function queueHtml(v) {
   const topPickable = myTurn && queue[0] && !queue[0].tb && !v.pickedIds.has(queue[0].c);
   return `
     <p class="hint">On your turn the <b>top</b> card is picked automatically for you. If someone
-    else picked it first, it stays here marked ⚠️ and the draft <b>waits for you</b> —
+    else picked it first, it stays here marked and the draft <b>waits for you</b> —
     dismiss it (✕) and pick, or reorder the queue.</p>
     ${queue.length ? `<div id="q-list">${queue.map((item, i) => `
       <div class="q-row ${item.tb ? 'taken' : ''}" data-qi="${i}">
         <span class="q-drag" title="Drag to reorder">☰</span>
         <span class="pos">${i + 1}</span>
         <span class="nm" data-card="${item.c}">${esc(item.n)}
-          ${item.tb ? `<span class="q-taken">⚠️ picked by ${esc(item.tb)}</span>` : ''}</span>
+          ${item.tb ? `<span class="q-taken">picked by ${esc(item.tb)}</span>` : ''}</span>
         <button class="btn btn-sm" data-up="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
         <button class="btn btn-sm" data-down="${i}" ${i === queue.length - 1 ? 'disabled' : ''}>↓</button>
         <button class="btn btn-sm btn-danger" data-rm="${i}" title="${item.tb ? 'Dismiss' : 'Remove'}">✕</button>
       </div>`).join('')}</div>`
-    : '<div class="empty">Queue is empty — add cards from the pool 🃏</div>'}
-    ${topPickable ? `<button class="btn btn-primary btn-block" id="q-pick-top" style="margin-top:10px">🎯 Pick ${esc(queue[0].n)} now</button>` : ''}
-    ${!state.pushOn && queue.length ? `<button class="btn btn-block" id="q-push" style="margin-top:10px">🔕 Enable notifications to hear about snipes</button>` : ''}`;
+    : '<div class="empty">Queue is empty — add cards from the pool</div>'}
+    ${topPickable ? `<button class="btn btn-primary btn-block" id="q-pick-top" style="margin-top:10px">Pick ${esc(queue[0].n)} now</button>` : ''}
+    ${!state.pushOn && queue.length ? `<button class="btn btn-block" id="q-push" style="margin-top:10px">Enable notifications to hear about snipes</button>` : ''}`;
 }
 
 function bindQueue() {
@@ -1488,15 +1533,15 @@ function renderAdminPanelHtml() {
   const players = Object.entries(d.players || {});
   const adminLink = `${BASE}?d=${state.draftId}&a=${state.creds.adminSecret}`;
   return `<div class="panel" id="admin-panel">
-    <h2>👑 Admin</h2>
+    <h2>Admin</h2>
     <div class="link-row"><span class="lbl">Admin link</span>
       <span class="url">${esc(adminLink)}</span>
       <button class="btn btn-sm" data-copy="${esc(adminLink)}" data-lbl="Admin link">Copy</button></div>
     <p class="hint">Open the admin link on another device to stay admin there too.</p>
     ${d.status === 'lobby' ? `
       <div class="row" style="margin-bottom:8px">
-        ${players.length >= 2 ? `<button class="btn" id="force-start" style="flex:1">▶ Start now with ${players.length} players</button>` : ''}
-        <button class="btn" id="add-bot" style="flex:1">🤖 Add bot</button>
+        ${players.length >= 2 ? `<button class="btn" id="force-start" style="flex:1">Start now with ${players.length} players</button>` : ''}
+        <button class="btn" id="add-bot" style="flex:1">Add bot</button>
       </div>
       <p class="hint">Bots pick automatically on their turn using CubeCobra card ratings
         (random if the pool has none). Great for testing or filling seats.</p>` : ''}
@@ -1508,7 +1553,7 @@ function renderAdminPanelHtml() {
         <button class="btn" id="adm-remind-save">Save</button>
       </div></div>
     <h3>Danger zone</h3>
-    <button class="btn btn-danger btn-block" id="del-draft">🗑 Delete this draft</button>
+    <button class="btn btn-danger btn-block" id="del-draft">Delete this draft</button>
     <p class="hint">Removes the draft, its card pool, all picks, queues, and every invite/private link. Cannot be undone.</p>
   </div>`;
 }
@@ -1539,11 +1584,11 @@ async function bindAdminPanel() {
   wrap.innerHTML = Object.entries(state.draft.players || {}).map(([pid, p]) => {
     const link = `${BASE}?d=${state.draftId}&p=${pid}&s=${secrets[pid] || ''}`;
     return `<div class="admin-player">
-      <div class="top"><span class="nm">${esc(p.name)}${p.uid ? ' ✅' : ''}${v?.curPid === pid ? ' 🎯' : ''}</span>
+      <div class="top"><span class="nm">${esc(p.name)}${p.uid ? ' <span class="dash-as">Google</span>' : ''}${v?.curPid === pid ? ' <span class="dash-as">turn</span>' : ''}</span>
         ${p.bot
-          ? (state.draft.status === 'lobby' ? `<button class="btn btn-sm btn-danger" data-rmbot="${pid}">✕ Remove</button>` : '')
-          : `<button class="btn btn-sm" data-copy="${esc(link)}" data-lbl="${esc(p.name)}'s link">🔗 Private link</button>
-             <button class="btn btn-sm" data-ping="${pid}">📣 Ping</button>`}</div>
+          ? (state.draft.status === 'lobby' ? `<button class="btn btn-sm btn-danger" data-rmbot="${pid}">Remove</button>` : '')
+          : `<button class="btn btn-sm" data-copy="${esc(link)}" data-lbl="${esc(p.name)}'s link">Private link</button>
+             <button class="btn btn-sm" data-ping="${pid}">Ping</button>`}</div>
     </div>`;
   }).join('') || '<p class="hint">Nobody joined yet.</p>';
   bindCopyButtons();
@@ -1561,7 +1606,7 @@ async function bindAdminPanel() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Ping failed');
-      toast(`Pinged ${name} 📣`);
+      toast(`Pinged ${name}`);
     } catch (e) { toast(e.message, true); }
     b.disabled = false;
   }));
@@ -1603,7 +1648,7 @@ async function addBot() {
   if (d.status !== 'lobby') { toast('Bots can only be added in the lobby.', true); return; }
   if (Object.keys(players).length >= s.players) { toast('The lobby is already full.', true); return; }
   const taken = new Set(Object.values(players).map((p) => p.name));
-  const base = BOT_NAMES.find((n) => !taken.has(`🤖 ${n}`)) || `Bot-${rid(4)}`;
+  const base = BOT_NAMES.find((n) => !taken.has(`Bot ${n}`)) || `Bot-${rid(4)}`;
   const pid = 'bot-' + rid(8);
   try {
     // private doc first: when the players entry lands, the lobby may
@@ -1612,9 +1657,9 @@ async function addBot() {
       secret: rid(16), queue: [], pushSubs: [], bot: true,
     });
     await updateDoc(doc(db, 'rd-drafts', state.draftId), {
-      [`players.${pid}`]: { name: `🤖 ${base}`, uid: null, bot: true, joinedAt: Date.now() },
+      [`players.${pid}`]: { name: `Bot ${base}`, uid: null, bot: true, joinedAt: Date.now() },
     });
-    toast(`🤖 ${base} joined the table.`);
+    toast(`Bot ${base} joined the table.`);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -1673,7 +1718,7 @@ async function enablePush() {
     }
     state.pushEndpoint = json.endpoint;
     state.pushOn = true;
-    toast('Notifications enabled 🔔');
+    toast('Notifications enabled.');
     render();
   } catch (e) { toast('Push setup failed: ' + e.message, true); }
 }
@@ -1692,7 +1737,7 @@ async function disablePush() {
     }
     state.pushEndpoint = null;
     state.pushOn = false;
-    toast('Notifications off 🔕');
+    toast('Notifications off.');
     render();
   } catch (e) { toast('Could not disable push: ' + e.message, true); }
 }

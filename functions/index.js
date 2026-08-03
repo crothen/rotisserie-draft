@@ -331,7 +331,7 @@ exports.rdOnDraftWrite = onDocumentWritten(
         for (const pid of order) {
           await sendPush(draftId, pid, {
             title,
-            body: 'The draft is complete! 🎉 Check out the final decks.',
+            body: 'The draft is complete. Check out the final decks.',
             url,
             tag: 'rd-done',
           });
@@ -432,7 +432,7 @@ exports.rdOnDraftWrite = onDocumentWritten(
           title,
           body:
             pid === curPid
-              ? `The draft has started — you're up first! 🎲`
+              ? `The draft has started — you are up first!`
               : `The draft has started! ${firstName} picks first.`,
           url,
           tag: 'rd-start',
@@ -479,7 +479,7 @@ exports.rdReminder = onSchedule(
       await docSnap.ref.update({ lastReminderAt: Date.now() });
       await sendPush(docSnap.id, curPid, {
         title: d.name || 'Rotisserie Draft',
-        body: `⏰ Reminder: it's still your turn, ${name} — the table is waiting!`,
+        body: `Reminder: it is still your turn, ${name} — the table is waiting!`,
         url: `/?d=${docSnap.id}`,
         tag: 'rd-reminder',
       });

@@ -41,7 +41,28 @@ button { font-family: inherit; }
   padding: 10px 14px; padding-top: calc(10px + env(safe-area-inset-top));
   background: var(--panel); border-bottom: 1px solid var(--border);
 }
-.topbar .logo { font-size: 22px; text-decoration: none; }
+.topbar .logo {
+  font-size: 13px; font-weight: 800; letter-spacing: 0.1em; text-decoration: none;
+  color: var(--accent); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;
+}
+.topbar .logo:hover { border-color: var(--accent); }
+.iconbtn svg { display: block; }
+.automark {
+  display: inline-block; font-size: 9px; font-weight: 800; color: var(--bg);
+  background: var(--muted); border-radius: 4px; padding: 0 4px; vertical-align: 1px;
+}
+.admintag {
+  display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--accent); border: 1px solid var(--accent-dark);
+  border-radius: 5px; padding: 1px 5px; margin-left: 4px; vertical-align: 1px;
+}
+.mini-chip[data-color="W"] { color: #efeadb; }
+.mini-chip[data-color="U"] { color: #6ea4e8; }
+.mini-chip[data-color="B"] { color: #a89bb8; }
+.mini-chip[data-color="R"] { color: #e07070; }
+.mini-chip[data-color="G"] { color: #6cc394; }
+.mini-chip[data-color="M"] { color: var(--accent); }
+.mini-chip[data-color].active { color: #1a1206; }
 .topbar .title { font-weight: 700; font-size: 16px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar .title small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
 .iconbtn {
@@ -103,12 +124,12 @@ button { font-family: inherit; }
   font-size: 14px; color: var(--accent); text-decoration: none; white-space: nowrap;
 }
 .landing-nav { margin-left: auto; display: flex; gap: 22px; align-items: center; }
-.landing-nav a[data-scroll] {
+.landing-nav a {
   color: var(--muted); font-size: 13px; font-weight: 600;
   text-decoration: none; letter-spacing: 0.02em;
 }
-.landing-nav a[data-scroll]:hover { color: var(--text); }
-@media (max-width: 560px) { .landing-nav a[data-scroll] { display: none; } }
+.landing-nav a:hover { color: var(--text); }
+@media (max-width: 560px) { .landing-nav a { display: none; } }
 
 .landing { max-width: 900px; margin: 0 auto; padding: 0 24px 40px; }
 .eyebrow {
@@ -123,15 +144,24 @@ button { font-family: inherit; }
 .finehint { color: var(--muted); font-size: 13px; opacity: 0.75; }
 
 .how { padding: 68px 0 56px; border-bottom: 1px solid var(--border); }
-.steps2 { display: grid; grid-template-columns: 1fr; gap: 0 48px; }
-@media (min-width: 760px) { .steps2 { grid-template-columns: 1fr 1fr; } }
-.stepn { border-top: 1px solid var(--border); padding: 22px 0 28px; }
-.stepn .num { color: var(--accent); font-weight: 800; font-size: 12px; letter-spacing: 0.18em; margin-bottom: 10px; }
-.stepn h3 { font-size: 17px; margin: 0 0 8px; color: var(--text); text-transform: none; letter-spacing: 0; }
-.stepn p { color: var(--muted); font-size: 14px; line-height: 1.65; }
+.steps2 { display: flex; flex-direction: column; }
+.stepn {
+  border-top: 1px solid var(--border); padding: 34px 0 40px;
+  max-width: 580px; width: 100%;
+}
+.stepn:nth-child(even) { margin-left: auto; text-align: right; }
+.stepn .num { color: var(--accent); font-weight: 800; font-size: 13px; letter-spacing: 0.2em; margin-bottom: 12px; }
+.stepn h3 { font-size: 22px; margin: 0 0 12px; color: var(--text); text-transform: none; letter-spacing: -0.01em; }
+.stepn p { color: var(--muted); font-size: 16px; line-height: 1.7; }
+@media (max-width: 600px) {
+  .stepn { padding: 26px 0 30px; }
+  .stepn h3 { font-size: 19px; }
+  .stepn p { font-size: 15px; }
+}
 
 .contact2 { padding: 68px 0 56px; max-width: 580px; border-bottom: 1px solid var(--border); }
-.lead2 { color: var(--muted); margin-bottom: 22px; font-size: 15px; line-height: 1.6; }
+.pagetitle { font-size: 34px; margin-bottom: 14px; letter-spacing: -0.01em; }
+.lead2 { color: var(--muted); margin-bottom: 24px; font-size: 16px; line-height: 1.6; }
 
 .landing-footer {
   padding: 36px 0 24px; color: var(--muted); font-size: 13px;
