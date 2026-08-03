@@ -3,6 +3,7 @@ import { db, auth } from './firebase-init.js';
 import {
   doc, getDoc, setDoc, updateDoc, onSnapshot, runTransaction,
   collection, getDocs, arrayUnion, deleteField, deleteDoc,
+  addDoc, query, orderBy, limit,
 } from 'https://www.gstatic.com/firebasejs/11.3.0/firebase-firestore.js';
 import {
   GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut,
@@ -59,6 +60,8 @@ const state = {
   pushEndpoint: null, // this device's push subscription endpoint
   unsubDraft: null,
   unsubPriv: null,
+  unsubChat: null,
+  chat: [],
 };
 
 // Push is "on" only if THIS device's subscription is registered in my
@@ -249,6 +252,7 @@ function subscribeDraft() {
       recordMembership();
       subscribeMyPriv();
     }
+    if (state.draft.status === 'active' || state.draft.status === 'done') subscribeChat();
     if ((state.draft.status === 'active' || state.draft.status === 'done') && !state.pool) {
       await loadPool();
       render();
@@ -293,6 +297,41 @@ async function recordMembership(draftId = state.draftId, draftName, role) {
       drafts: { [draftId]: { name: draftName || '', role: role || 'player', at: Date.now() } },
     }, { merge: true });
   } catch (e) { console.warn('recordMembership failed', e); }
+}
+
+// Players-only chat: realtime listener on the chat subcollection.
+function subscribeChat() {
+  if (state.unsubChat || !myPid()) return;
+  const q = query(
+    collection(db, 'rd-drafts', state.draftId, 'chat'),
+    orderBy('at', 'desc'), limit(100));
+  state.unsubChat = onSnapshot(q, (snap) => {
+    state.chat = snap.docs.map((s) => ({ id: s.id, ...s.data() })).reverse();
+    render();
+  }, (e) => console.warn('chat listener failed', e));
+}
+
+function chatSeenKey() { return `rd_chatseen_${state.draftId}`; }
+function chatUnread() {
+  if (!myPid()) return 0;
+  const seen = +localStorage.getItem(chatSeenKey()) || 0;
+  return state.chat.filter((m) => m.at > seen && m.pid !== myPid()).length;
+}
+
+async function sendChat() {
+  const input = $('#chat-input');
+  const text = input?.value.trim();
+  if (!text || !myPid()) return;
+  if (text.length > 500) { toast('Keep messages under 500 characters.', true); return; }
+  input.value = '';
+  try {
+    await addDoc(collection(db, 'rd-drafts', state.draftId, 'chat'), {
+      pid: myPid(),
+      name: state.draft.players?.[myPid()]?.name || '?',
+      text,
+      at: Date.now(),
+    });
+  } catch (e) { toast('Sending failed: ' + e.message, true); }
 }
 
 async function tryUidRejoin() {
@@ -1235,6 +1274,10 @@ function renderDraft() {
     ['players', 'Decks'],
     ['queue', `Queue${state.myPriv?.queue?.length ? ` (${state.myPriv.queue.length})` : ''}`],
   ];
+  if (me) {
+    const unread = state.tab === 'chat' ? 0 : chatUnread();
+    tabs.push(['chat', `Chat${unread ? ` (${unread})` : ''}`]);
+  }
   if (isAdmin()) tabs.push(['admin', 'Admin']);
 
   $('#app').innerHTML = `
@@ -1428,6 +1471,7 @@ function tabContentHtml(v) {
     case 'grid': return gridHtml(v);
     case 'players': return playersHtml(v);
     case 'queue': return queueHtml(v);
+    case 'chat': return chatHtml();
     case 'admin': return renderAdminPanelHtml();
     default: return '';
   }
@@ -1438,8 +1482,42 @@ function bindTabContent(v) {
     case 'grid': return bindGrid(v);
     case 'players': return bindPlayers(v);
     case 'queue': return bindQueue(v);
+    case 'chat': return bindChat();
     case 'admin': return bindAdminPanel();
   }
+}
+
+// ---------- chat (players only) ----------
+function chatHtml() {
+  if (!myPid()) return '<div class="empty">The chat is for drafting players.</div>';
+  const fmt = (at) => {
+    const d = new Date(at || 0);
+    const today = new Date().toDateString() === d.toDateString();
+    return (today ? '' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ' ') +
+      d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  };
+  return `
+    <div class="chat-list" id="chat-list">
+      ${state.chat.length ? state.chat.map((m) => `
+        <div class="chat-msg ${m.pid === myPid() ? 'mine' : ''}">
+          <div class="chat-head"><span class="who">${esc(m.name)}</span><span class="when">${fmt(m.at)}</span></div>
+          <div class="txt">${esc(m.text)}</div>
+        </div>`).join('')
+      : '<p class="hint">No messages yet. Say hello!</p>'}
+    </div>
+    <div class="chat-form">
+      <input type="text" id="chat-input" maxlength="500" placeholder="Message the table…" autocomplete="off">
+      <button class="btn btn-primary" id="chat-send">Send</button>
+    </div>`;
+}
+
+function bindChat() {
+  if (!myPid()) return;
+  localStorage.setItem(chatSeenKey(), String(Date.now()));
+  const list = $('#chat-list');
+  if (list) list.scrollTop = list.scrollHeight;
+  $('#chat-send')?.addEventListener('click', sendChat);
+  $('#chat-input')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
 }
 
 // ---------- grid / draft overview table ----------
@@ -2186,8 +2264,11 @@ async function deleteDraft() {
   try {
     state.unsubDraft?.(); state.unsubDraft = null;
     state.unsubPriv?.(); state.unsubPriv = null;
+    state.unsubChat?.(); state.unsubChat = null;
     const privSnaps = await getDocs(collection(db, 'rd-drafts', state.draftId, 'private'));
     await Promise.all(privSnaps.docs.map((d) => deleteDoc(d.ref)));
+    const chatSnaps = await getDocs(collection(db, 'rd-drafts', state.draftId, 'chat'));
+    await Promise.all(chatSnaps.docs.map((d) => deleteDoc(d.ref)));
     await deleteDoc(doc(db, 'rd-drafts', state.draftId, 'meta', 'pool'));
     await deleteDoc(doc(db, 'rd-drafts', state.draftId));
     const all = allCreds();

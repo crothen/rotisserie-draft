@@ -552,6 +552,19 @@ tr.dbl-b td { border-bottom-color: rgba(224, 164, 88, 0.5); }
 }
 #card-tip img { width: 240px; border-radius: 4.75% / 3.5%; box-shadow: 0 12px 40px rgba(0,0,0,0.7); }
 
+/* ---------- chat ---------- */
+.chat-list {
+  display: flex; flex-direction: column; gap: 12px;
+  max-height: 56vh; overflow-y: auto; padding: 4px 0 8px;
+}
+.chat-msg .chat-head { display: flex; gap: 8px; align-items: baseline; }
+.chat-msg .who { font-weight: 700; font-size: 13px; }
+.chat-msg.mine .who { color: var(--accent); }
+.chat-msg .when { font-size: 11px; color: var(--muted); }
+.chat-msg .txt { font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.chat-form { display: flex; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+.chat-form input { flex: 1; }
+
 /* ---------- modal ---------- */
 .modal-backdrop {
   position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.75);
