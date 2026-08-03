@@ -862,42 +862,66 @@ function renderLobby() {
   const inviteLink = `${BASE}?d=${state.draftId}`;
   const privLink = joined ? `${BASE}?d=${state.draftId}&p=${myPid()}&s=${state.creds.secret}` : '';
 
+  const seats = [];
+  for (const [pid, p] of players) {
+    const me = pid === myPid();
+    const sub = [me ? 'you' : null, p.bot ? 'bot' : null, p.uid && !p.bot ? 'Google' : null]
+      .filter(Boolean).join(' · ');
+    seats.push(`<div class="seat ${me ? 'me' : ''}">
+      <div class="s-name">${esc(p.name)}</div>
+      ${sub ? `<div class="s-sub">${sub}</div>` : ''}
+    </div>`);
+  }
+  for (let i = players.length; i < s.players; i++) {
+    seats.push('<div class="seat empty">Open seat</div>');
+  }
+
   $('#app').innerHTML = `
     ${topbar(d.name, 'Lobby — waiting for players', !!joined)}
     <div class="container">
-      <div class="panel">
-        <h1>Lobby ${players.length}/${s.players}</h1>
-        <p class="hint">${s.totalPicks} cards each · rounds 1–${s.singleRounds} single pick, then 2 per turn ·
-          ${s.reminderHours ? `${s.reminderHours}h pick reminder` : 'no reminder'}
-          ${d.cubeUrl ? ` · <a href="${esc(d.cubeUrl)}" target="_blank" rel="noopener">cube ↗</a>` : ''}</p>
-        <div class="chips" style="margin:10px 0">
-          ${players.map(([pid, p]) => `<span class="chip ${pid === myPid() ? 'active' : ''}">${esc(p.name)}</span>`).join('') || '<span class="hint">Nobody here yet…</span>'}
-        </div>
-        <p class="hint">The draft starts automatically (random order) when ${s.players} players have joined.</p>
-        ${!joined ? `
-          <div class="field"><label>Your name</label>
-            <input type="text" id="j-name" maxlength="24" placeholder="Player name"></div>
-          <button class="btn btn-primary btn-block" id="j-go">Join draft</button>
-        ` : `
-          <p style="margin:8px 0">You're in as <b>${esc(d.players[myPid()].name)}</b></p>
-          <div class="link-row"><span class="lbl">Your private link</span>
-            <span class="url">${esc(privLink)}</span>
-            <button class="btn btn-sm" data-copy="${esc(privLink)}" data-lbl="Private link">Copy</button></div>
-          <p class="hint">Open your private link on any device to rejoin — or link your Google
-            account below and just sign in.</p>
-          <div class="row" style="margin-top:8px">
-            ${!d.players[myPid()].uid ? `<button class="btn" id="link-google">Link Google account</button>` : `<span class="chip">Google linked</span>`}
-            <button class="btn" id="push-btn">${state.pushOn ? 'Turn notifications off' : 'Enable notifications'}</button>
+      <div class="lobby-grid">
+        <div class="lobby-main">
+          <div class="lobby-head">
+            <h1>Lobby</h1>
+            <span class="lobby-count">${players.length} of ${s.players} seats filled</span>
           </div>
-        `}
+          <p class="lobby-meta">${s.totalPicks} cards each · rounds 1–${s.singleRounds} single pick, then 2 per turn ·
+            ${s.reminderHours ? `${s.reminderHours}h pick reminder` : 'no reminder'}
+            ${d.cubeUrl ? ` · <a href="${esc(d.cubeUrl)}" target="_blank" rel="noopener">cube ↗</a>` : ''}</p>
+          <div class="seats">${seats.join('')}</div>
+          <p class="hint">The draft starts automatically with a random seat order once every seat is filled.</p>
+
+          ${!joined ? `
+          <div class="joinblock">
+            <h2>Take a seat</h2>
+            <div class="join-row">
+              <input type="text" id="j-name" maxlength="24" placeholder="Your name">
+              <button class="btn btn-primary" id="j-go">Join draft</button>
+            </div>
+          </div>` : `
+          <div class="youblock">
+            <h2>You're in as ${esc(d.players[myPid()].name)}</h2>
+            <div class="you-actions">
+              <button class="btn btn-sm" data-copy="${esc(privLink)}" data-lbl="Private link">Copy private link</button>
+              ${!d.players[myPid()].uid
+                ? '<button class="btn btn-sm" id="link-google">Link Google account</button>'
+                : '<span class="chip">Google linked</span>'}
+              <button class="btn btn-sm" id="push-btn">${state.pushOn ? 'Turn notifications off' : 'Enable notifications'}</button>
+            </div>
+            <p class="hint">The private link rejoins this draft on any device. With Google linked,
+              signing in is enough.</p>
+          </div>`}
+
+          <div class="inviteblock">
+            <h2>Invite players</h2>
+            <div class="invite-row">
+              <button class="btn btn-primary" data-copy="${esc(inviteLink)}" data-lbl="Invite link">Copy invite link</button>
+              <code class="invite-url">${esc(inviteLink)}</code>
+            </div>
+          </div>
+        </div>
+        ${isAdmin() ? `<aside class="lobby-side">${renderAdminPanelHtml()}</aside>` : ''}
       </div>
-      <div class="panel">
-        <h2>Invite players</h2>
-        <div class="link-row"><span class="lbl">Invite link</span>
-          <span class="url">${esc(inviteLink)}</span>
-          <button class="btn btn-sm" data-copy="${esc(inviteLink)}" data-lbl="Invite link">Copy</button></div>
-      </div>
-      ${isAdmin() ? renderAdminPanelHtml() : ''}
     </div>`;
   bindTopbar();
   bindCopyButtons();
@@ -1568,29 +1592,39 @@ function renderAdminPanelHtml() {
   const s = settingsOf(d);
   const players = Object.entries(d.players || {});
   const adminLink = `${BASE}?d=${state.draftId}&a=${state.creds.adminSecret}`;
-  return `<div class="panel" id="admin-panel">
+  return `<div id="admin-panel" class="adminbox">
     <h2>Admin</h2>
-    <div class="link-row"><span class="lbl">Admin link</span>
-      <span class="url">${esc(adminLink)}</span>
-      <button class="btn btn-sm" data-copy="${esc(adminLink)}" data-lbl="Admin link">Copy</button></div>
-    <p class="hint">Open the admin link on another device to stay admin there too.</p>
     ${d.status === 'lobby' ? `
-      <div class="row" style="margin-bottom:8px">
-        ${players.length >= 2 ? `<button class="btn" id="force-start" style="flex:1">Start now with ${players.length} players</button>` : ''}
-        <button class="btn" id="add-bot" style="flex:1">Add bot</button>
+    <div class="adm-section">
+      <div class="adm-actions">
+        <button class="btn btn-sm" id="add-bot">Add bot</button>
+        ${players.length >= 2 ? `<button class="btn btn-sm" id="force-start">Start now with ${players.length}</button>` : ''}
+        <button class="btn btn-sm" data-copy="${esc(adminLink)}" data-lbl="Admin link">Copy admin link</button>
       </div>
-      <p class="hint">Bots pick automatically on their turn using CubeCobra card ratings
-        (random if the pool has none). Great for testing or filling seats.</p>` : ''}
-    <h3>Players — private links & pings</h3>
-    <div id="admin-players">${players.length ? '' : '<p class="hint">Nobody joined yet.</p>'}</div>
-    <div class="field" style="margin-top:12px"><label>Reminder after (hours, 0 = off)</label>
-      <div style="display:flex;gap:8px">
-        <input type="number" id="adm-remind" value="${s.reminderHours}" min="0" max="168">
-        <button class="btn" id="adm-remind-save">Save</button>
-      </div></div>
-    <h3>Danger zone</h3>
-    <button class="btn btn-danger btn-block" id="del-draft">Delete this draft</button>
-    <p class="hint">Removes the draft, its card pool, all picks, queues, and every invite/private link. Cannot be undone.</p>
+      <p class="hint">Bots pick by CubeCobra ratings on their turn. The admin link makes another
+        device admin too.</p>
+    </div>` : `
+    <div class="adm-section">
+      <div class="adm-actions">
+        <button class="btn btn-sm" data-copy="${esc(adminLink)}" data-lbl="Admin link">Copy admin link</button>
+      </div>
+    </div>`}
+    <div class="adm-section">
+      <h3>Players</h3>
+      <div id="admin-players">${players.length ? '' : '<p class="hint">Nobody joined yet.</p>'}</div>
+    </div>
+    <div class="adm-section">
+      <h3>Pick reminder</h3>
+      <div class="adm-inline">
+        <input type="number" id="adm-remind" value="${s.reminderHours}" min="0" max="168" class="adm-num">
+        <span class="hint" style="margin:0">hours (0 = off)</span>
+        <button class="btn btn-sm" id="adm-remind-save">Save</button>
+      </div>
+    </div>
+    <div class="adm-section">
+      <button class="btn btn-sm btn-danger" id="del-draft">Delete this draft</button>
+      <p class="hint">Removes the pool, all picks, queues, and every link. Cannot be undone.</p>
+    </div>
   </div>`;
 }
 

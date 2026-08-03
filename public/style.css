@@ -175,6 +175,49 @@ button { font-family: inherit; }
   .hero h1 { font-size: 33px; }
 }
 
+/* ---------- lobby ---------- */
+.lobby-grid { display: grid; grid-template-columns: 1fr; gap: 0 56px; }
+@media (min-width: 920px) {
+  .lobby-grid { grid-template-columns: 1.7fr 1fr; align-items: start; }
+  .lobby-side { border-left: 1px solid var(--border); padding-left: 36px; }
+}
+.lobby-main { padding-top: 22px; }
+.lobby-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.lobby-count { color: var(--accent); font-size: 14px; font-weight: 700; }
+.lobby-meta { color: var(--muted); font-size: 14px; margin: 6px 0 0; }
+.seats {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px; margin: 20px 0 12px;
+}
+.seat {
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  min-height: 60px; display: flex; flex-direction: column; justify-content: center; gap: 3px;
+}
+.seat .s-name { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seat .s-sub { font-size: 11px; color: var(--muted); }
+.seat.me { border-color: var(--accent); }
+.seat.empty {
+  border-style: dashed; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 13px;
+}
+.joinblock, .youblock, .inviteblock { margin-top: 30px; padding-top: 22px; border-top: 1px solid var(--border); }
+.join-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.join-row input { flex: 1; min-width: 200px; }
+.you-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 10px; }
+.invite-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.invite-url {
+  font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+
+/* ---------- admin panel ---------- */
+.adminbox { padding: 22px 0; }
+.adm-section { margin-bottom: 22px; }
+.adm-section:last-child { margin-bottom: 0; }
+.adm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.adm-inline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.adm-num { width: 72px !important; text-align: center; }
+
 .mydrafts { padding: 20px 0 10px; border-bottom: 1px solid var(--border); }
 .mydrafts-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
 .mydrafts-head a { font-size: 13px; font-weight: 600; }
