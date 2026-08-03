@@ -12,6 +12,7 @@
       { "source": "/new", "destination": "/index.html" },
       { "source": "/dashboard", "destination": "/index.html" },
       { "source": "/contact", "destination": "/index.html" },
+      { "source": "/admin", "destination": "/index.html" },
       {
         "source": "/api/rd/fetchCube",
         "function": {

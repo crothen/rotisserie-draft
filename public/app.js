@@ -13,11 +13,12 @@ const VAPID_PUBLIC =
   'BBwWu4Duu4THhbcxb1fJofvfaWQgu13WHe6OnvDkHA23yU7fcCfpe-MShsMtsqOc84K_ruonzvVh_Z0M12zsGqY';
 // App root: strips a page segment (/new, /dashboard, /contact) so BASE
 // always points at the app's root path with a trailing slash.
-const ROOT_PATH = location.pathname.replace(/(?:new|dashboard|contact)\/?$/, '');
+const ROOT_PATH = location.pathname.replace(/(?:new|dashboard|contact|admin)\/?$/, '');
 const BASE = location.origin + ROOT_PATH;
 const URL_NEW = BASE + 'new';
 const URL_DASH = BASE + 'dashboard';
 const URL_CONTACT = BASE + 'contact';
+const URL_ADMIN = BASE + 'admin';
 
 const ICON_BELL_ON =
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>';
@@ -433,6 +434,7 @@ function currentPage() {
   if (seg === 'new') return 'new';
   if (seg === 'dashboard') return 'dashboard';
   if (seg === 'contact') return 'contact';
+  if (seg === 'admin') return 'siteadmin';
   if (location.hash === '#app') return 'dashboard'; // legacy links
   if (location.hash === '#contact') return 'contact';
   return 'landing';
@@ -443,6 +445,7 @@ function routeHome() {
     case 'new': return renderNew();
     case 'dashboard': return renderDashboard();
     case 'contact': return renderContact();
+    case 'siteadmin': return renderSiteAdmin();
     default: return renderLanding(); // the landing is always the main page
   }
 }
@@ -658,18 +661,53 @@ function renderDashboard() {
         <h2 style="margin-top:0">Watching</h2>
         <div id="dash-watch"><p class="hint">Loading…</p></div>
       </div>` : ''}
-      ${isOwner() ? `<div class="panel">
-        <h2 style="margin-top:0">All drafts <span class="dash-as">site admin</span></h2>
-        <div id="dash-all"><p class="hint">Loading…</p></div>
-      </div>` : ''}
-      ${isOwner() ? `<div class="panel">
-        <h2 style="margin-top:0">Contact messages <span class="dash-as">site admin</span></h2>
-        <div id="dash-contact"><p class="hint">Loading…</p></div>
-      </div>` : ''}
-      <p class="hint" style="text-align:center"><a href="${BASE}">About</a> · <a href="${URL_CONTACT}">Contact</a></p>
+      <p class="hint" style="text-align:center"><a href="${BASE}">About</a> · <a href="${URL_CONTACT}">Contact</a>${isOwner() ? ` · <a href="${URL_ADMIN}">Site admin</a>` : ''}</p>
     </div>`;
   bindTopbar();
   loadDashboard();
+}
+
+// ----------------------------------------------------------------
+// SITE ADMIN — owner only: every draft in the system + contact inbox
+// ----------------------------------------------------------------
+function renderSiteAdmin() {
+  if (!isOwner()) {
+    $('#app').innerHTML = `
+      ${topbar('Rotisserie Draft', 'Site admin')}
+      <div class="container"><div class="panel" style="border-bottom:none">
+        <h1>Site admin</h1>
+        <p class="hint">${state.user
+          ? 'This account is not the site administrator.'
+          : 'Sign in with the administrator account to continue.'}</p>
+        ${state.user ? `<a class="btn" href="${URL_DASH}">Back to the dashboard</a>`
+          : '<button class="btn btn-primary" id="sa-signin">Sign in with Google</button>'}
+      </div></div>`;
+    bindTopbar();
+    $('#sa-signin')?.addEventListener('click', async () => {
+      try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+      catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.message, true); }
+    });
+    return;
+  }
+  $('#app').innerHTML = `
+    ${topbar('Rotisserie Draft', 'Site admin')}
+    <div class="container">
+      <div class="panel">
+        <h2 style="margin-top:0">Overview</h2>
+        <div class="specs" id="admin-stats"><p class="hint">Loading…</p></div>
+      </div>
+      <div class="panel">
+        <h2 style="margin-top:0">All drafts</h2>
+        <div id="dash-all"><p class="hint">Loading…</p></div>
+      </div>
+      <div class="panel">
+        <h2 style="margin-top:0">Contact messages</h2>
+        <div id="dash-contact"><p class="hint">Loading…</p></div>
+      </div>
+      <p class="hint" style="text-align:center"><a href="${URL_DASH}">Back to the dashboard</a></p>
+    </div>`;
+  bindTopbar();
+  loadOwnerDashboard();
 }
 
 function renderNew() {
@@ -752,7 +790,6 @@ async function loadDashboard() {
     ? list.map((r) => r.html).join('')
     : '<p class="hint">No drafts yet. Create one below!</p>';
   loadWatchedDrafts();
-  loadOwnerDashboard();
 }
 
 // Drafts opened via watcher link, shown on the dashboard read-only.
@@ -835,11 +872,25 @@ async function loadOwnerDashboard() {
   try {
     const snaps = await getDocs(collection(db, 'rd-drafts'));
     const rows = [];
-    snaps.forEach((snap) => rows.push(dashRow(snap.id, snap.data(), { admin: true, ownerMode: true })));
+    const stats = { total: 0, lobby: 0, active: 0, done: 0, players: 0 };
+    snaps.forEach((snap) => {
+      const d = snap.data();
+      stats.total++;
+      stats[d.status] = (stats[d.status] || 0) + 1;
+      stats.players += Object.keys(d.players || {}).length;
+      rows.push(dashRow(snap.id, d, { admin: true, ownerMode: true }));
+    });
     rows.sort((a, b) => a.sortKey - b.sortKey || b.at - a.at);
     el.innerHTML = rows.length
       ? rows.map((r) => r.html).join('')
       : '<p class="hint">No drafts exist yet.</p>';
+    const statsEl = $('#admin-stats');
+    if (statsEl) {
+      statsEl.innerHTML = [
+        ['Drafts', stats.total], ['In lobby', stats.lobby], ['Active', stats.active],
+        ['Finished', stats.done], ['Seats taken', stats.players],
+      ].map(([l, v2]) => `<div><span class="spec-l">${l}</span><span class="spec-v">${v2}</span></div>`).join('');
+    }
   } catch (e) {
     el.innerHTML = `<p class="hint">Failed to load: ${esc(e.message)}</p>`;
   }
@@ -898,6 +949,7 @@ function topbar(title, sub = '', showBell = false) {
          <div class="usermenu" id="user-menu" style="display:none">
            <div class="usermenu-note">${esc(state.user.email || '')}</div>
            <a class="usermenu-item" href="${URL_DASH}">Dashboard</a>
+           ${state.ownerOk ? `<a class="usermenu-item" href="${URL_ADMIN}">Site admin</a>` : ''}
            <button class="usermenu-item" id="menu-logout">Sign out</button>
          </div>`
       : `<button class="iconbtn" id="auth-btn" title="Sign in with Google">Sign in</button>`}
