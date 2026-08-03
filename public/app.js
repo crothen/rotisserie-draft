@@ -584,6 +584,14 @@ function renderHome() {
         </div>
         <p class="hint">Single-pick rounds: how many rounds are 1 card per turn before switching
         to 2 cards per turn. Reminder 0 = off.</p>
+        <div class="field">
+          <label class="checkline" style="text-transform:none;letter-spacing:0">
+            <input type="checkbox" id="c-oldest"> Use each card's oldest printing for images
+          </label>
+          <p class="hint">Looks up the first paper printing of every card on Scryfall — creating
+          the draft takes noticeably longer. Off = default printing (artwork pinned in the cube
+          is always respected either way).</p>
+        </div>
         ${state.user
           ? '<button class="btn btn-primary btn-block" id="c-go">Create draft</button>'
           : `<p class="hint">Creating a draft requires an account, so you can manage it later from any device.</p>
@@ -945,9 +953,11 @@ async function createDraft() {
       throw new Error(`Pool has ${names.length} cards but ${players} players × ${totalPicks} picks needs ${need}. Reduce players/picks or use a bigger cube.`);
     }
     const { byName, byId, notFound } = await resolveScryfall(cubeCards, statusEl);
-    // oldest printing images for all cards without an explicit cube artwork
-    const oldest = await resolveOldestImages(
-      [...new Set(cubeCards.filter((c) => !c.customId).map((c) => c.name))], statusEl);
+    // optionally: oldest printing images for cards without an explicit cube artwork
+    const oldest = $('#c-oldest')?.checked
+      ? await resolveOldestImages(
+          [...new Set(cubeCards.filter((c) => !c.customId).map((c) => c.name))], statusEl)
+      : {};
     const pool = cubeCards.map(({ name, elo, customId }) => {
       const custom = customId ? byId[customId] : null;
       const base = custom || byName[name.toLowerCase()] ||
