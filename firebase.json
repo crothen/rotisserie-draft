@@ -9,6 +9,9 @@
     "public": "public",
     "ignore": ["firebase.json", "**/node_modules/**"],
     "rewrites": [
+      { "source": "/new", "destination": "/index.html" },
+      { "source": "/dashboard", "destination": "/index.html" },
+      { "source": "/contact", "destination": "/index.html" },
       {
         "source": "/api/rd/fetchCube",
         "function": {

@@ -10,10 +10,18 @@ import {
 
 const VAPID_PUBLIC =
   'BBwWu4Duu4THhbcxb1fJofvfaWQgu13WHe6OnvDkHA23yU7fcCfpe-MShsMtsqOc84K_ruonzvVh_Z0M12zsGqY';
-const BASE = location.origin + location.pathname;
+// App root: strips a page segment (/new, /dashboard, /contact) so BASE
+// always points at the app's root path with a trailing slash.
+const ROOT_PATH = location.pathname.replace(/(?:new|dashboard|contact)\/?$/, '');
+const BASE = location.origin + ROOT_PATH;
+const URL_NEW = BASE + 'new';
+const URL_DASH = BASE + 'dashboard';
+const URL_CONTACT = BASE + 'contact';
 
 const ICON_BELL_ON =
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>';
+const ICON_DECK =
+  '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="12" height="16" rx="1"/><path d="M8 2h12v16"/></svg>';
 const ICON_SHARE =
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="10.5" x2="15.4" y2="6.5"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/></svg>';
 const ICON_BELL_OFF =
@@ -176,7 +184,7 @@ async function boot() {
     }
   });
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js')
+    navigator.serviceWorker.register(ROOT_PATH + 'sw.js')
       .then((reg) => reg.pushManager?.getSubscription())
       .then((sub) => {
         state.pushEndpoint = sub?.endpoint || null;
@@ -196,7 +204,7 @@ async function boot() {
       routeHome(); // re-render so the auth button + dashboard update
     }
   });
-  state.draftId = parseParams();
+  state.draftId = currentPage() === 'landing' ? parseParams() : null;
   if (!state.draftId) {
     window.addEventListener('hashchange', routeHome);
     routeHome();
@@ -346,21 +354,34 @@ function render() {
 // ----------------------------------------------------------------
 // HOME routing: landing page for visitors, app home for players
 // ----------------------------------------------------------------
+function currentPage() {
+  const seg = location.pathname.slice(ROOT_PATH.length).replace(/\/$/, '');
+  if (seg === 'new') return 'new';
+  if (seg === 'dashboard') return 'dashboard';
+  if (seg === 'contact') return 'contact';
+  if (location.hash === '#app') return 'dashboard'; // legacy links
+  if (location.hash === '#contact') return 'contact';
+  return 'landing';
+}
+
 function routeHome() {
-  if (location.hash === '#contact') return renderContact();
-  if (location.hash === '#app') return renderHome();
-  renderLanding(); // the landing is always the main page (incl. #about)
+  switch (currentPage()) {
+    case 'new': return renderNew();
+    case 'dashboard': return renderDashboard();
+    case 'contact': return renderContact();
+    default: return renderLanding(); // the landing is always the main page
+  }
 }
 
 function landingHeader(page) {
   return `<header class="landing-header">
-    <a class="wordmark" href="#about">Rotisserie Draft</a>
+    <a class="wordmark" href="${BASE}">Rotisserie Draft</a>
     <nav class="landing-nav">
       ${page === 'landing'
         ? '<a href="#" data-scroll="how">How it works</a>'
-        : '<a href="#about">How it works</a>'}
-      <a href="#contact">Contact</a>
-      <button class="btn btn-sm landing-signin">${state.user ? 'Open the app' : 'Sign in'}</button>
+        : `<a href="${BASE}">How it works</a>`}
+      <a href="${URL_CONTACT}">Contact</a>
+      <button class="btn btn-sm landing-signin">${state.user ? 'Dashboard' : 'Sign in'}</button>
     </nav>
   </header>`;
 }
@@ -371,7 +392,7 @@ function bindLandingChrome() {
     $(`#sec-${a.dataset.scroll}`)?.scrollIntoView({ behavior: 'smooth' });
   }));
   $$('.landing-signin').forEach((b) => b.addEventListener('click', async () => {
-    if (state.user) { location.hash = '#app'; return; }
+    if (state.user) { location.href = URL_DASH; return; }
     try {
       await signInWithPopup(auth, new GoogleAuthProvider());
       // auth listener re-renders; signed-in landing shows ongoing drafts
@@ -392,7 +413,7 @@ function renderLanding() {
       <section class="mydrafts" id="landing-drafts" style="display:none">
         <div class="mydrafts-head">
           <span class="eyebrow" style="margin:0">Your ongoing drafts</span>
-          <a href="#app">Open the app</a>
+          <a href="${URL_DASH}">Dashboard</a>
         </div>
         <div id="landing-drafts-list"></div>
       </section>` : ''}
@@ -403,8 +424,8 @@ function renderLanding() {
         time in snake order, and a draft runs over hours or days at your own pace. Push
         notifications make sure nobody misses a turn.</p>
         <div class="hero-cta">
-          <a class="btn btn-primary btn-lg" href="#app">Start a draft</a>
-          <button class="btn btn-lg landing-signin">${signedIn ? 'Open the app' : 'Sign in or register'}</button>
+          <a class="btn btn-primary btn-lg" href="${URL_NEW}">Start a draft</a>
+          <button class="btn btn-lg landing-signin">${signedIn ? 'Dashboard' : 'Sign in or register'}</button>
         </div>
         <p class="finehint">Free and without ads. Creating a draft requires a Google account.
         Players join with a link, no account needed.</p>
@@ -435,8 +456,8 @@ function renderLanding() {
 
       <footer class="landing-footer">
         <span>Built for slow drafting with friends. No ads. No tracking.</span>
-        <a href="#contact">Contact</a>
-        <a href="#app">Open the app</a>
+        <a href="${URL_CONTACT}">Contact</a>
+        <a href="${URL_DASH}">Dashboard</a>
       </footer>
     </div>`;
   bindLandingChrome();
@@ -513,8 +534,8 @@ function renderContact() {
       </section>
       <footer class="landing-footer">
         <span>Built for slow drafting with friends. No ads. No tracking.</span>
-        <a href="#about">About</a>
-        <a href="#app">Open the app</a>
+        <a href="${BASE}">About</a>
+        <a href="${URL_DASH}">Dashboard</a>
       </footer>
     </div>`;
   bindLandingChrome();
@@ -546,21 +567,38 @@ function renderContact() {
 // ----------------------------------------------------------------
 // HOME — create draft + my drafts
 // ----------------------------------------------------------------
-function renderHome() {
+function renderDashboard() {
   $('#app').innerHTML = `
-    ${topbar('Rotisserie Draft', 'MTG snake draft from a shared pool')}
+    ${topbar('Rotisserie Draft', 'Dashboard')}
     <div class="container">
       <div class="panel" id="dash-panel">
-        <h2 style="margin-top:0">Your drafts</h2>
+        <div class="lobby-head" style="margin-bottom:10px">
+          <h2 style="margin:0">Your drafts</h2>
+          <a class="btn btn-sm btn-primary" href="${URL_NEW}">New draft</a>
+        </div>
         <div id="dash">${state.user || Object.keys(allCreds()).length
           ? '<p class="hint">Loading…</p>'
-          : '<p class="hint">No drafts yet. Sign in with Google to see drafts from other devices, or create one below.</p>'}</div>
+          : `<p class="hint">No drafts yet. Sign in with Google to see drafts from other devices, or <a href="${URL_NEW}">create one</a>.</p>`}</div>
       </div>
       ${isOwner() ? `<div class="panel">
         <h2 style="margin-top:0">All drafts <span class="dash-as">site admin</span></h2>
         <div id="dash-all"><p class="hint">Loading…</p></div>
       </div>` : ''}
-      <div class="panel">
+      ${isOwner() ? `<div class="panel">
+        <h2 style="margin-top:0">Contact messages <span class="dash-as">site admin</span></h2>
+        <div id="dash-contact"><p class="hint">Loading…</p></div>
+      </div>` : ''}
+      <p class="hint" style="text-align:center"><a href="${BASE}">About</a> · <a href="${URL_CONTACT}">Contact</a></p>
+    </div>`;
+  bindTopbar();
+  loadDashboard();
+}
+
+function renderNew() {
+  $('#app').innerHTML = `
+    ${topbar('Rotisserie Draft', 'New draft')}
+    <div class="container">
+      <div class="panel" style="border-bottom:none">
         <h1>New Rotisserie Draft</h1>
         <p class="hint">Everyone sees the whole pool and drafts one card at a time, snake order
         (1→8, 8→1, …). After a while players pick 2 cards per turn.</p>
@@ -597,12 +635,8 @@ function renderHome() {
           : `<p class="hint">Creating a draft requires an account, so you can manage it later from any device.</p>
              <button class="btn btn-primary btn-block" id="c-signin">Sign in with Google to create</button>`}
         <p class="hint" id="c-status"></p>
+        <p class="hint" style="margin-top:14px"><a href="${URL_DASH}">Back to the dashboard</a></p>
       </div>
-      ${isOwner() ? `<div class="panel">
-        <h2 style="margin-top:0">Contact messages <span class="dash-as">site admin</span></h2>
-        <div id="dash-contact"><p class="hint">Loading…</p></div>
-      </div>` : ''}
-      <p class="hint" style="text-align:center"><a href="#about">About & contact</a></p>
     </div>`;
   bindTopbar();
   $('#c-usetext').addEventListener('change', (e) => {
@@ -616,7 +650,6 @@ function renderHome() {
       // auth listener re-renders with the create button enabled
     } catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.message, true); }
   });
-  loadDashboard();
 }
 
 // Dashboard: merge drafts from this device (localStorage) with drafts
@@ -758,7 +791,7 @@ function topbar(title, sub = '', showBell = false) {
          </button>
          <div class="usermenu" id="user-menu" style="display:none">
            <div class="usermenu-note">${esc(state.user.email || '')}</div>
-           <a class="usermenu-item" href="${BASE}">My Drafts</a>
+           <a class="usermenu-item" href="${URL_DASH}">Dashboard</a>
            <button class="usermenu-item" id="menu-logout">Sign out</button>
          </div>`
       : `<button class="iconbtn" id="auth-btn" title="Sign in with Google">Sign in</button>`}
@@ -1164,8 +1197,10 @@ function renderDraft() {
         ${tabs.map(([id, lbl]) => `<button class="tab-btn ${state.tab === id ? 'active' : ''}" data-tab="${id}">${lbl}</button>`).join('')}
       </div>
       <div id="tab-content">${tabContentHtml(v)}</div>
-    </div>`;
+    </div>
+    ${me ? `<button class="fab" id="deck-fab" title="Your deck">${ICON_DECK}<span class="fab-count">${v.picks.filter((p) => p.p === me).length}</span></button>` : ''}`;
   bindTopbar();
+  $('#deck-fab')?.addEventListener('click', openMyDeckModal);
   $$('.tab-btn').forEach((b) => b.addEventListener('click', () => { state.tab = b.dataset.tab; render(); }));
   bindTabContent(v);
   if (!v.done && me) bindPickbar(v, myTurn);
@@ -1602,6 +1637,39 @@ function openCardModal(cardId) {
   $('#m-pick')?.addEventListener('click', () => doPick(cardId));
   $('#m-queue')?.addEventListener('click', () => addToQueue(cardId));
   $('#m-close')?.addEventListener('click', closeModal);
+}
+
+// Quick view of my own deck from anywhere in the draft (floating button)
+function openMyDeckModal() {
+  const me = myPid();
+  if (!me) return;
+  const v = draftView(state.draft);
+  const sb = new Set(state.myPriv?.sideboard || []);
+  const picks = v.picks.map((p, gi) => ({ ...p, gi })).filter((p) => p.p === me);
+  const main = picks.filter((p) => !sb.has(p.c));
+  const sbPicks = picks.filter((p) => sb.has(p.c));
+  const groups = {};
+  for (const p of main) {
+    const t = state.pool[p.c]?.t || '';
+    const g = TYPE_FILTERS.find((ty) => t.includes(ty)) || 'Other';
+    (groups[g] ||= []).push(p);
+  }
+  const listHtml = TYPE_FILTERS.concat('Other')
+    .filter((g) => groups[g]?.length)
+    .map((g) => `<h3>${g} (${groups[g].length})</h3>
+      <div class="pick-rows">${groups[g]
+        .sort((a, b) => (state.pool[a.c]?.v || 0) - (state.pool[b.c]?.v || 0))
+        .map((p) => pickRowHtml(p)).join('')}</div>`)
+    .join('');
+  openModal(`
+    <h2>Your deck (${main.length}${sbPicks.length ? ` + ${sbPicks.length} SB` : ''})</h2>
+    ${main.length ? listHtml : '<p class="hint">No picks yet.</p>'}
+    ${sbPicks.length ? `<h3>Sideboard (${sbPicks.length})</h3>
+      <div class="pick-rows">${sbPicks.map((p) => pickRowHtml(p)).join('')}</div>` : ''}
+    <div class="modal-actions"><button class="btn" id="m-close">Close</button></div>`);
+  $('#m-close')?.addEventListener('click', closeModal);
+  $$('.modal .pick-row[data-card]').forEach((el) =>
+    el.addEventListener('click', () => openCardModal(+el.dataset.card)));
 }
 
 // ---------- players / decks ----------
