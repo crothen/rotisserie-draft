@@ -14,6 +14,8 @@ const BASE = location.origin + location.pathname;
 
 const ICON_BELL_ON =
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>';
+const ICON_SHARE =
+  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="10.5" x2="15.4" y2="6.5"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/></svg>';
 const ICON_BELL_OFF =
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
 // SHA-256 of the site owner's email — identifies the owner in public
@@ -44,6 +46,7 @@ const state = {
   groupByType: true,
   deckView: 'list',
   gridMode: 'names',
+  watcher: false,
   pushOn: false,
   pushEndpoint: null, // this device's push subscription endpoint
   unsubDraft: null,
@@ -156,6 +159,7 @@ function parseParams() {
   const p = new URLSearchParams(location.search);
   const draftId = p.get('d');
   if (draftId) {
+    state.watcher = p.get('w') === '1';
     if (p.get('p') && p.get('s')) saveCreds(draftId, { pid: p.get('p'), secret: p.get('s') });
     if (p.get('a')) saveCreds(draftId, { adminSecret: p.get('a') });
     if (p.get('p') || p.get('a')) history.replaceState(null, '', `${location.pathname}?d=${draftId}`);
@@ -733,6 +737,8 @@ function topbar(title, sub = '', showBell = false) {
   return `<div class="topbar">
     <a class="logo" href="${BASE}">RD</a>
     <div class="title">${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ''}</div>
+    ${state.draft ? `<button class="iconbtn" id="share-btn"
+      title="${state.draft.status === 'lobby' ? 'Share the invite link' : 'Share a watcher link'}">${ICON_SHARE}</button>` : ''}
     ${showBell ? `<button class="iconbtn ${state.pushOn ? 'on' : ''}" id="bell-btn"
       title="${state.pushOn ? 'Notifications on — click to turn off' : 'Notifications off — click to enable'}">${state.pushOn ? ICON_BELL_ON : ICON_BELL_OFF}</button>` : ''}
     ${state.user
@@ -750,7 +756,31 @@ function topbar(title, sub = '', showBell = false) {
       : `<button class="iconbtn" id="auth-btn" title="Sign in with Google">Sign in</button>`}
   </div>`;
 }
+// Native share sheet where available, clipboard copy otherwise.
+async function shareOrCopy(url, title, text, label) {
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, text, url });
+      return;
+    } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  copyText(url, label);
+}
+
+function shareCurrentLink() {
+  const d = state.draft;
+  if (!d) return;
+  if (d.status === 'lobby') {
+    shareOrCopy(`${BASE}?d=${state.draftId}`, d.name,
+      `Join our rotisserie draft "${d.name}"`, 'Invite link');
+  } else {
+    shareOrCopy(`${BASE}?d=${state.draftId}&w=1`, d.name,
+      `Watch our rotisserie draft "${d.name}" live`, 'Watcher link');
+  }
+}
+
 function bindTopbar() {
+  $('#share-btn')?.addEventListener('click', shareCurrentLink);
   $('#bell-btn')?.addEventListener('click', togglePush);
   $('#auth-btn')?.addEventListener('click', async () => {
     if (state.user) {
@@ -1020,6 +1050,7 @@ function renderLobby() {
             <h2>Invite players</h2>
             <div class="invite-row">
               <button class="btn btn-primary" data-copy="${esc(inviteLink)}" data-lbl="Invite link">Copy invite link</button>
+              <button class="btn" id="inv-share">Share</button>
               <code class="invite-url">${esc(inviteLink)}</code>
             </div>
           </div>
@@ -1035,6 +1066,7 @@ function renderLobby() {
   $('#link-google')?.addEventListener('click', linkGoogle);
   $('#push-btn')?.addEventListener('click', togglePush);
   $('#leave-draft')?.addEventListener('click', leaveDraft);
+  $('#inv-share')?.addEventListener('click', shareCurrentLink);
 }
 
 async function joinDraft() {
@@ -1112,7 +1144,9 @@ function renderDraft() {
   if (isAdmin()) tabs.push(['admin', 'Admin']);
 
   $('#app').innerHTML = `
-    ${topbar(d.name, v.done ? 'Draft complete' : 'Drafting…', !!me)}
+    ${topbar(d.name,
+      v.done ? 'Draft complete' : (state.watcher && !me ? 'Watching live' : 'Drafting…'),
+      !!me)}
     <div class="container">
       ${turnBannerHtml(v, me)}
       ${!v.done && me ? pickbarHtml(myTurn) : ''}
@@ -1842,7 +1876,9 @@ function renderAdminPanelHtml() {
     <div class="adm-section">
       <div class="adm-actions">
         <button class="btn btn-sm" data-copy="${esc(adminLink)}" data-lbl="Admin link">Copy admin link</button>
+        <button class="btn btn-sm" data-copy="${esc(`${BASE}?d=${state.draftId}&w=1`)}" data-lbl="Watcher link">Copy watcher link</button>
       </div>
+      <p class="hint">The watcher link opens a read-only live view for spectators.</p>
     </div>`}
     <div class="adm-section">
       <h3>Players</h3>
