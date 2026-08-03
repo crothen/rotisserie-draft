@@ -1,0 +1,20 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Rotisserie Draft — hobby-style open access; drafts live behind
+    // unguessable ids in the invite link.
+    match /rd-drafts/{draftId}/{document=**} {
+      allow read, write: if true;
+    }
+    // Per-user draft membership index for the dashboard
+    match /rd-users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if request.auth != null && request.auth.uid == uid;
+    }
+    // Contact messages: written only by the rdContact function and read
+    // only through the rdInbox function (admin SDK bypasses rules)
+    match /rd-contact/{msgId} {
+      allow read, write: if false;
+    }
+  }
+}

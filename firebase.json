@@ -1,0 +1,53 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "functions": {
+    "source": "functions"
+  },
+  "hosting": {
+    "public": "public",
+    "ignore": ["firebase.json", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "/api/rd/fetchCube",
+        "function": {
+          "functionId": "rdFetchCube",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/rd/ping",
+        "function": {
+          "functionId": "rdPing",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/rd/contact",
+        "function": {
+          "functionId": "rdContact",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/rd/inbox",
+        "function": {
+          "functionId": "rdInbox",
+          "region": "us-central1"
+        }
+      }
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-store, no-cache, must-revalidate, max-age=0"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "Rotisserie Draft",
+  "short_name": "Rotisserie",
+  "description": "MTG rotisserie draft with live picks, queues and push notifications",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#12141c",
+  "theme_color": "#12141c",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
