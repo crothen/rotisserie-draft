@@ -806,7 +806,7 @@ function dashRow(id, d, { admin = false, pid = null, ownerMode = false, watchMod
         <div class="dash-status">${statusTxt}</div>
         <div class="dash-meta">${meta}</div>
       </div>
-      <a class="btn btn-sm ${myTurn ? 'btn-primary' : ''}" href="${href}">${watchMode ? 'Watch' : ownerMode ? 'Open as admin' : 'Open'}</a>
+      <a class="btn btn-sm ${myTurn ? 'btn-primary' : ''}" href="${href}">${watchMode ? 'Watch' : 'Open'}</a>
       ${watchMode ? `<button class="btn btn-sm" data-unwatch="${esc(id)}" title="Remove from watching">✕</button>` : ''}
     </div>`,
   };
