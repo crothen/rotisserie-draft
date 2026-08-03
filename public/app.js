@@ -1135,7 +1135,8 @@ async function createDraft() {
 function renderLobby() {
   const d = state.draft;
   const s = settingsOf(d);
-  const players = Object.entries(d.players || {});
+  const players = Object.entries(d.players || {})
+    .sort((a, b) => (a[1].joinedAt || 0) - (b[1].joinedAt || 0));
   const joined = myPid() && d.players?.[myPid()];
   const inviteLink = `${BASE}?d=${state.draftId}`;
   const privLink = joined ? `${BASE}?d=${state.draftId}&p=${myPid()}&s=${state.creds.secret}` : '';
@@ -2269,35 +2270,7 @@ async function bindAdminPanel() {
   bindCopyButtons();
   $('#start-draft')?.addEventListener('click', startDraft);
   $('#add-bot')?.addEventListener('click', addBot);
-  $$('[data-rmplayer]').forEach((b) => b.addEventListener('click', async () => {
-    const pid = b.dataset.rmplayer;
-    const p = state.draft.players?.[pid];
-    if (!p) return;
-    if (!p.bot && !confirm(`Remove ${p.name} from the draft?`)) return;
-    try {
-      await removePlayerFromLobby(pid);
-      toast(`${p.name} removed.`);
-    } catch (e) { toast(e.message, true); }
-  }));
   $('#del-draft')?.addEventListener('click', deleteDraft);
-  $$('[data-drop]').forEach((b) => b.addEventListener('click', async () => {
-    const pid = b.dataset.drop;
-    const name = state.draft.players?.[pid]?.name || '?';
-    if (!confirm(`Drop ${name}? Their turns will be skipped from now on (their picks stay).`)) return;
-    try { await setPlayerFlag(pid, 'dropped', true); toast(`${name} dropped.`); } catch (e) { toast(e.message, true); }
-  }));
-  $$('[data-undrop]').forEach((b) => b.addEventListener('click', async () => {
-    try { await setPlayerFlag(b.dataset.undrop, 'dropped', null); toast('Player is back in the draft.'); } catch (e) { toast(e.message, true); }
-  }));
-  $$('[data-tobot]').forEach((b) => b.addEventListener('click', async () => {
-    const pid = b.dataset.tobot;
-    const name = state.draft.players?.[pid]?.name || '?';
-    if (!confirm(`Let a bot draft for ${name} from now on?`)) return;
-    try { await setPlayerFlag(pid, 'bot', true); toast(`A bot now picks for ${name}.`); } catch (e) { toast(e.message, true); }
-  }));
-  $$('[data-unbot]').forEach((b) => b.addEventListener('click', async () => {
-    try { await setPlayerFlag(b.dataset.unbot, 'bot', null); toast('Player picks for themselves again.'); } catch (e) { toast(e.message, true); }
-  }));
   $('#adm-remind-save')?.addEventListener('click', async () => {
     const h = Math.max(0, parseInt($('#adm-remind').value, 10) || 0);
     await updateDoc(doc(db, 'rd-drafts', state.draftId), { 'settings.reminderHours': h });
@@ -2312,7 +2285,15 @@ async function bindAdminPanel() {
   privSnaps.forEach((s) => { secrets[s.id] = s.data().secret; });
   const v = state.draft.status === 'lobby' ? null : draftView(state.draft);
   const inLobby = state.draft.status === 'lobby';
-  wrap.innerHTML = Object.entries(state.draft.players || {}).map(([pid, p]) => {
+  // stable ordering: seat order once drafting, join order in the lobby
+  const seatOrder = state.draft.order || [];
+  const sorted = Object.entries(state.draft.players || {}).sort((a, b) => {
+    const ia = seatOrder.indexOf(a[0]);
+    const ib = seatOrder.indexOf(b[0]);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 1e9 : ia) - (ib === -1 ? 1e9 : ib);
+    return (a[1].joinedAt || 0) - (b[1].joinedAt || 0);
+  });
+  wrap.innerHTML = sorted.map(([pid, p]) => {
     const link = `${BASE}?d=${state.draftId}&p=${pid}&s=${secrets[pid] || ''}`;
     const origBot = pid.startsWith('bot-');
     return `<div class="admin-player">
@@ -2331,6 +2312,34 @@ async function bindAdminPanel() {
     </div>`;
   }).join('') || '<p class="hint">Nobody joined yet.</p>';
   bindCopyButtons();
+  $$('[data-rmplayer]', wrap).forEach((b) => b.addEventListener('click', async () => {
+    const pid = b.dataset.rmplayer;
+    const p = state.draft.players?.[pid];
+    if (!p) return;
+    if (!p.bot && !confirm(`Remove ${p.name} from the draft?`)) return;
+    try {
+      await removePlayerFromLobby(pid);
+      toast(`${p.name} removed.`);
+    } catch (e) { toast(e.message, true); }
+  }));
+  $$('[data-drop]', wrap).forEach((b) => b.addEventListener('click', async () => {
+    const pid = b.dataset.drop;
+    const name = state.draft.players?.[pid]?.name || '?';
+    if (!confirm(`Drop ${name}? Their turns will be skipped from now on (their picks stay).`)) return;
+    try { await setPlayerFlag(pid, 'dropped', true); toast(`${name} dropped.`); } catch (e) { toast(e.message, true); }
+  }));
+  $$('[data-undrop]', wrap).forEach((b) => b.addEventListener('click', async () => {
+    try { await setPlayerFlag(b.dataset.undrop, 'dropped', null); toast('Player is back in the draft.'); } catch (e) { toast(e.message, true); }
+  }));
+  $$('[data-tobot]', wrap).forEach((b) => b.addEventListener('click', async () => {
+    const pid = b.dataset.tobot;
+    const name = state.draft.players?.[pid]?.name || '?';
+    if (!confirm(`Let a bot draft for ${name} from now on?`)) return;
+    try { await setPlayerFlag(pid, 'bot', true); toast(`A bot now picks for ${name}.`); } catch (e) { toast(e.message, true); }
+  }));
+  $$('[data-unbot]', wrap).forEach((b) => b.addEventListener('click', async () => {
+    try { await setPlayerFlag(b.dataset.unbot, 'bot', null); toast('Player picks for themselves again.'); } catch (e) { toast(e.message, true); }
+  }));
   $$('[data-ping]').forEach((b) => b.addEventListener('click', async () => {
     const pid = b.dataset.ping;
     const name = state.draft.players[pid]?.name || 'player';
