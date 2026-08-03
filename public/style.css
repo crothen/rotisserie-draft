@@ -248,7 +248,7 @@ button { font-family: inherit; }
 .mydrafts-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
 .mydrafts-head a { font-size: 13px; font-weight: 600; }
 
-.container { max-width: 1200px; margin: 0 auto; padding: 14px; padding-bottom: 90px; }
+.container { max-width: 1380px; margin: 0 auto; padding: 14px; padding-bottom: 90px; }
 @media (min-width: 800px) { .container { padding-bottom: 24px; } }
 
 /* ---------- generic ---------- */
