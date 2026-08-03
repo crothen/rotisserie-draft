@@ -43,6 +43,7 @@ const state = {
   filters: { search: '', colors: new Set(), types: new Set(), hidePicked: false, sort: 'pool' },
   groupByType: true,
   deckView: 'list',
+  gridMode: 'names',
   pushOn: false,
   pushEndpoint: null, // this device's push subscription endpoint
   unsubDraft: null,
@@ -1230,16 +1231,26 @@ function gridHtml(v) {
         return `<td class="${cls.join(' ')}" title="pick ${g + 1} of ${v.seq.length}">${g === curG ? '▸' : '·'}</td>`;
       }
       cls.push('filled');
-      return `<td class="${cls.join(' ')}" data-card="${pick.c}" title="pick ${g + 1}: ${esc(pick.n)}">${esc(pick.n)}${pick.auto ? ' <span class="automark" title="auto pick">A</span>' : ''}</td>`;
+      const pc = state.pool[pick.c];
+      const content = state.gridMode === 'images' && pc?.img
+        ? `<img class="gimg" loading="lazy" src="${esc(pc.img.replace('/normal/', '/small/'))}" alt="${esc(pick.n)}">`
+        : `${esc(pick.n)}${pick.auto ? ' <span class="automark" title="auto pick">A</span>' : ''}`;
+      return `<td class="${cls.join(' ')}" data-card="${pick.c}" title="pick ${g + 1}: ${esc(pick.n)}">${content}</td>`;
     });
     rows.push(`<tr class="${isDbl ? (pairFirst ? 'dbl-a' : 'dbl-b') : ''}">
       <td class="rowlbl">${slot + 1} <span class="dir">${dir}</span>${pairFirst ? '<span class="x2">×2</span>' : ''}</td>
       ${cells.join('')}</tr>`);
   }
   return `
-    <p class="hint">Snake order top to bottom — ${v.s.singleRounds ? `rows 1–${v.s.singleRounds} are single picks, after that each turn takes <b>2 cards ×2</b>.` : 'every turn takes 2 cards.'}
-      ${matchMedia('(hover: hover)').matches ? 'Hover a card for its image, click for details.' : 'Scroll in any direction, double-tap a card to see it.'}</p>
-    <div class="grid-wrap" id="grid-wrap"><table class="pick-grid">
+    <div class="row2" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <div class="viewtoggle">
+        <button class="mini-chip ${state.gridMode === 'names' ? 'active' : ''}" data-gridmode="names">Names</button>
+        <button class="mini-chip ${state.gridMode === 'images' ? 'active' : ''}" data-gridmode="images">Images</button>
+      </div>
+      <span class="hint" style="margin:0">Snake order top to bottom${v.s.singleRounds ? `, rows ${v.s.singleRounds + 1}+ take 2 cards per turn` : ''}.
+        ${matchMedia('(hover: hover)').matches ? 'Hover a card for its image, click for details.' : 'Tap a card to see it.'}</span>
+    </div>
+    <div class="grid-wrap" id="grid-wrap"><table class="pick-grid ${state.gridMode === 'images' ? 'img-mode' : ''}">
       <thead><tr><th class="rowlbl">#</th>
         ${v.order.map((pid, pi) => `<th class="${pi === curPi ? 'curcol' : ''}">
           ${esc(d.players[pid]?.name || '?')}
@@ -1265,8 +1276,15 @@ function bindGrid() {
   const tip = ensureCardTip();
   const canHover = matchMedia('(hover: hover)').matches;
   const hideTip = () => { tip.style.display = 'none'; tip.innerHTML = ''; };
+  $$('[data-gridmode]').forEach((b) => b.addEventListener('click', () => {
+    state.gridMode = b.dataset.gridmode;
+    render();
+  }));
   $$('.gcell[data-card]', wrap).forEach((td) => {
     const cardId = +td.dataset.card;
+    // tap/click opens the card everywhere (browsers suppress click after
+    // a scroll drag, so scrolling stays free on mobile)
+    td.addEventListener('click', () => { hideTip(); openCardModal(cardId); });
     if (canHover) {
       td.addEventListener('mouseenter', () => {
         const img = state.pool[cardId]?.img;
@@ -1283,16 +1301,6 @@ function bindGrid() {
         tip.style.top = y + 'px';
       });
       td.addEventListener('mouseleave', hideTip);
-      td.addEventListener('click', () => { hideTip(); openCardModal(cardId); });
-    } else {
-      // mobile: double-tap opens the card, single taps stay free for scrolling
-      let lastTap = 0;
-      td.addEventListener('pointerup', () => {
-        const now = Date.now();
-        if (now - lastTap < 400) { lastTap = 0; openCardModal(cardId); }
-        else lastTap = now;
-      });
-      td.addEventListener('contextmenu', (e) => e.preventDefault());
     }
   });
 }

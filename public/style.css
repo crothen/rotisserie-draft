@@ -504,6 +504,14 @@ textarea { min-height: 120px; resize: vertical; }
   touch-action: pan-x pan-y; /* allow scrolling but suppress double-tap zoom */
   user-select: none; -webkit-user-select: none;
 }
+.pick-grid.img-mode td.gcell { padding: 3px 4px; max-width: none; }
+.gimg {
+  width: 72px; display: block; border-radius: 4.75% / 3.5%;
+  background: var(--panel2); aspect-ratio: 488/680;
+}
+.pick-grid.img-mode td.gcell.cur, .pick-grid.img-mode td.gcell:not(.filled) {
+  min-width: 80px; text-align: center;
+}
 .pick-grid td.gcell.empty, .pick-grid td.gcell:not(.filled) { color: #3c4460; }
 .pick-grid td.gcell.filled { color: var(--text); cursor: pointer; }
 .pick-grid td.gcell.cur {
