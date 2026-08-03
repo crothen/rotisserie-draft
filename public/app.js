@@ -42,6 +42,7 @@ const state = {
   selPlayer: null,
   filters: { search: '', colors: new Set(), types: new Set(), hidePicked: false, sort: 'pool' },
   groupByType: true,
+  deckView: 'list',
   pushOn: false,
   pushEndpoint: null, // this device's push subscription endpoint
   unsubDraft: null,
@@ -1443,27 +1444,50 @@ function openCardModal(cardId) {
 // ---------- players / decks ----------
 function playersHtml(v) {
   const d = state.draft;
+  const own = state.selPlayer === myPid();
+  const sb = own ? new Set(state.myPriv?.sideboard || []) : new Set();
   const selPicks = v.picks.map((p, gi) => ({ ...p, gi })).filter((p) => p.p === state.selPlayer);
-  let listHtml;
+  const mainPicks = selPicks.filter((p) => !sb.has(p.c));
+  const sbPicks = selPicks.filter((p) => sb.has(p.c));
+  const curve = own && state.deckView === 'curve';
+
+  let bodyHtml;
   if (!selPicks.length) {
-    listHtml = '<div class="empty">No picks yet.</div>';
-  } else if (state.groupByType) {
-    const groups = {};
-    for (const p of selPicks) {
-      const t = state.pool[p.c]?.t || '';
-      const g = TYPE_FILTERS.find((ty) => t.includes(ty)) || 'Other';
-      (groups[g] ||= []).push(p);
-    }
-    listHtml = TYPE_FILTERS.concat('Other')
-      .filter((g) => groups[g]?.length)
-      .map((g) => `<div class="type-group"><h3>${g} (${groups[g].length})</h3>
-        <div class="pick-rows">${groups[g]
-          .sort((a, b) => (state.pool[a.c]?.v || 0) - (state.pool[b.c]?.v || 0))
-          .map(pickRowHtml).join('')}</div></div>`)
-      .join('');
+    bodyHtml = '<div class="empty">No picks yet.</div>';
+  } else if (curve) {
+    bodyHtml = curveHtml(mainPicks) + (sbPicks.length
+      ? `<h3>Sideboard (${sbPicks.length}) — not in the curve</h3>
+         <div class="pick-rows">${sbPicks.map((p) => pickRowHtml(p, sbActionHtml(p, false))).join('')}</div>`
+      : '');
   } else {
-    listHtml = `<div class="pick-rows">${selPicks.map(pickRowHtml).join('')}</div>`;
+    let listHtml;
+    if (state.groupByType) {
+      const groups = {};
+      for (const p of mainPicks) {
+        const t = state.pool[p.c]?.t || '';
+        const g = TYPE_FILTERS.find((ty) => t.includes(ty)) || 'Other';
+        (groups[g] ||= []).push(p);
+      }
+      listHtml = TYPE_FILTERS.concat('Other')
+        .filter((g) => groups[g]?.length)
+        .map((g) => `<div class="type-group"><h3>${g} (${groups[g].length})</h3>
+          <div class="pick-rows">${groups[g]
+            .sort((a, b) => (state.pool[a.c]?.v || 0) - (state.pool[b.c]?.v || 0))
+            .map((p) => pickRowHtml(p, own ? sbActionHtml(p, true) : '')).join('')}</div></div>`)
+        .join('');
+    } else {
+      listHtml = `<div class="pick-rows">${mainPicks
+        .map((p) => pickRowHtml(p, own ? sbActionHtml(p, true) : '')).join('')}</div>`;
+    }
+    bodyHtml = listHtml + (own ? `
+      <h3>Sideboard (${sbPicks.length})</h3>
+      <p class="hint">Only you can see your sideboard. Sideboard cards are excluded from the
+        mana curve.</p>
+      ${sbPicks.length
+        ? `<div class="pick-rows">${sbPicks.map((p) => pickRowHtml(p, sbActionHtml(p, false))).join('')}</div>`
+        : '<p class="hint">Empty — use the SB buttons to move cards here.</p>'}` : '');
   }
+
   return `
     <div class="chips" style="margin-bottom:12px">
       ${v.order.map((pid) => {
@@ -1472,33 +1496,96 @@ function playersHtml(v) {
           data-player="${pid}">${esc(d.players[pid]?.name || '?')} <span class="cnt">${count}</span></button>`;
       }).join('')}
     </div>
-    <div class="row2" style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
-      <label class="checkline"><input type="checkbox" id="group-type" ${state.groupByType ? 'checked' : ''}> group by type</label>
+    <div class="row2" style="display:flex;gap:10px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+      ${own ? `
+        <div class="viewtoggle">
+          <button class="mini-chip ${!curve ? 'active' : ''}" data-deckview="list">List</button>
+          <button class="mini-chip ${curve ? 'active' : ''}" data-deckview="curve">Curve</button>
+        </div>` : ''}
+      ${!curve ? `<label class="checkline"><input type="checkbox" id="group-type" ${state.groupByType ? 'checked' : ''}> group by type</label>` : ''}
       <button class="btn btn-sm" id="export-deck">Export list</button>
     </div>
-    ${listHtml}`;
+    ${bodyHtml}`;
 }
 
-function pickRowHtml(p) {
+// Mana curve of the maindeck: columns by mana value, lands separate.
+function curveHtml(mainPicks) {
+  const buckets = Array.from({ length: 8 }, () => []); // 0..6, 7+
+  const lands = [];
+  for (const p of mainPicks) {
+    const c = state.pool[p.c] || {};
+    if ((c.t || '').includes('Land')) { lands.push(p); continue; }
+    buckets[Math.min(Math.max(0, Math.round(c.v || 0)), 7)].push(p);
+  }
+  const col = (label, cards) => `
+    <div class="curve-col">
+      <div class="curve-head">${label}<br><b>${cards.length}</b></div>
+      <div class="curve-stack">
+        ${cards
+          .sort((a, b) => (state.pool[a.c]?.n || '').localeCompare(state.pool[b.c]?.n || ''))
+          .map((p) => {
+            const c = state.pool[p.c] || { n: p.n };
+            return c.img
+              ? `<img src="${esc(c.img.replace('/normal/', '/small/'))}" alt="${esc(c.n)}" data-card="${p.c}" loading="lazy">`
+              : `<div class="curve-noimg" data-card="${p.c}">${esc(c.n)}</div>`;
+          }).join('')}
+      </div>
+    </div>`;
+  const cols = buckets.map((cards, i) => col(i === 7 ? '7+' : String(i), cards));
+  if (lands.length) cols.push(col('Lands', lands));
+  return `<div class="curve">${cols.join('')}</div>`;
+}
+
+function sbActionHtml(p, toSb) {
+  return `<button class="btn btn-sm sb-btn" data-${toSb ? 'tosb' : 'fromsb'}="${p.c}"
+    title="${toSb ? 'Move to sideboard' : 'Move to maindeck'}">${toSb ? 'SB' : 'Main'}</button>`;
+}
+
+function pickRowHtml(p, action = '') {
   const c = state.pool[p.c] || { n: p.n, m: '', t: '' };
   return `<div class="pick-row" data-card="${p.c}">
     <span class="num">${p.gi + 1}</span>
     <span>${esc(c.n)}</span>${p.auto ? ' <span class="automark" title="auto-picked from queue">A</span>' : ''}
-    <span class="mana">${manaHtml(c.m)}</span>
+    <span class="mana">${manaHtml(c.m)}</span>${action}
   </div>`;
+}
+
+async function setSideboard(arr) {
+  await updateDoc(doc(db, 'rd-drafts', state.draftId, 'private', myPid()), { sideboard: arr });
 }
 
 function bindPlayers() {
   $$('[data-player]').forEach((b) => b.addEventListener('click', () => {
     state.selPlayer = b.dataset.player; render();
   }));
+  $$('[data-deckview]').forEach((b) => b.addEventListener('click', () => {
+    state.deckView = b.dataset.deckview; render();
+  }));
   $('#group-type')?.addEventListener('change', (e) => { state.groupByType = e.target.checked; render(); });
-  $$('.pick-row[data-card]').forEach((el) => el.addEventListener('click', () => openCardModal(+el.dataset.card)));
+  $$('.pick-row[data-card]').forEach((el) => el.addEventListener('click', (e) => {
+    if (e.target.closest('.sb-btn')) return;
+    openCardModal(+el.dataset.card);
+  }));
+  $$('.curve [data-card]').forEach((el) => el.addEventListener('click', () => openCardModal(+el.dataset.card)));
+  $$('[data-tosb]').forEach((b) => b.addEventListener('click', () => {
+    const sb = state.myPriv?.sideboard || [];
+    const id = +b.dataset.tosb;
+    if (!sb.includes(id)) setSideboard([...sb, id]);
+  }));
+  $$('[data-fromsb]').forEach((b) => b.addEventListener('click', () => {
+    const id = +b.dataset.fromsb;
+    setSideboard((state.myPriv?.sideboard || []).filter((x) => x !== id));
+  }));
   $('#export-deck')?.addEventListener('click', () => {
     const v = draftView(state.draft);
-    const names = v.picks.filter((p) => p.p === state.selPlayer).map((p) => p.n);
+    const own = state.selPlayer === myPid();
+    const sb = own ? new Set(state.myPriv?.sideboard || []) : new Set();
+    const picks = v.picks.filter((p) => p.p === state.selPlayer);
+    let text = picks.filter((p) => !sb.has(p.c)).map((p) => p.n).join('\n');
+    const sbNames = picks.filter((p) => sb.has(p.c)).map((p) => p.n);
+    if (sbNames.length) text += '\n\nSideboard:\n' + sbNames.join('\n');
     const playerName = state.draft.players[state.selPlayer]?.name || 'deck';
-    const blob = new Blob([names.join('\n')], { type: 'text/plain' });
+    const blob = new Blob([text], { type: 'text/plain' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `${playerName.replace(/\W+/g, '_')}_rotisserie.txt`;

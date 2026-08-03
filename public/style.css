@@ -414,6 +414,36 @@ textarea { min-height: 120px; resize: vertical; }
 .pick-row .mana { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .type-group { margin-bottom: 10px; }
 
+/* ---------- own deck: sideboard + mana curve ---------- */
+.viewtoggle { display: flex; gap: 0; }
+.viewtoggle .mini-chip { border-right-width: 0; }
+.viewtoggle .mini-chip:last-child { border-right-width: 1px; }
+.sb-btn { margin-left: 8px; padding: 3px 8px; font-size: 11px; }
+.curve {
+  display: flex; gap: 8px; align-items: flex-start;
+  overflow-x: auto; padding-bottom: 10px; -webkit-overflow-scrolling: touch;
+}
+.curve-col { flex: 1; min-width: 92px; max-width: 150px; }
+.curve-head {
+  text-align: center; font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; margin-bottom: 8px;
+}
+.curve-head b { color: var(--text); font-size: 14px; }
+.curve-stack { display: flex; flex-direction: column; }
+.curve-stack img, .curve-noimg {
+  width: 100%; display: block; border-radius: 4.75% / 3.5%; cursor: pointer;
+  background: var(--panel2); aspect-ratio: 488/680;
+}
+.curve-stack img:not(:first-child), .curve-stack .curve-noimg:not(:first-child) {
+  margin-top: -117%;
+}
+.curve-stack img:hover, .curve-stack .curve-noimg:hover {
+  z-index: 5; position: relative; outline: 1px solid var(--accent);
+}
+.curve-noimg {
+  border: 1px solid var(--border); font-size: 11px; padding: 8px 6px; text-align: center;
+}
+
 /* ---------- queue ---------- */
 .q-row {
   display: flex; align-items: center; gap: 8px; padding: 10px 0; margin: 0;
