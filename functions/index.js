@@ -392,16 +392,33 @@ exports.rdOnDraftWrite = onDocumentWritten(
       }
     }
 
-    // --- Bot turn: pick by CubeCobra elo (jitter breaks ties; pure
-    // random when the pool has no elo data, e.g. pasted lists) ---
+    // --- Bot turn: score = CubeCobra elo + color affinity. The
+    // affinity bonus grows with every on-color card the bot already
+    // holds, so early picks follow ratings and later picks commit to
+    // the bot's colors. Colorless cards get a partial fits-anywhere
+    // bonus. Jitter breaks ties (pure random for elo-less pools). ---
     if (after.players?.[curPid]?.bot) {
       const poolSnap = await db.doc(`rd-drafts/${draftId}/meta/pool`).get();
       const pool = poolSnap.exists ? poolSnap.data().cards || [] : [];
+      const counts = { W: 0, U: 0, B: 0, R: 0, G: 0 };
+      for (const p of picks) {
+        if (p.p !== curPid) continue;
+        for (const ch of pool[p.c]?.c || '') {
+          if (counts[ch] != null) counts[ch]++;
+        }
+      }
+      const K = 28; // elo points of bonus per on-color card already drafted
+      const top2 = Object.values(counts).sort((a, b) => b - a).slice(0, 2);
+      const colorlessBonus = 0.5 * K * ((top2[0] + top2[1]) / 2);
       let bestId = -1;
       let bestScore = -Infinity;
       pool.forEach((c, i) => {
         if (allPicked.has(i)) return;
-        const score = (c.e || 0) + Math.random() * 60;
+        const cols = c.c || '';
+        const bonus = cols.length
+          ? (K * [...cols].reduce((sum, ch) => sum + (counts[ch] || 0), 0)) / cols.length
+          : colorlessBonus;
+        const score = (c.e || 0) + bonus + Math.random() * 60;
         if (score > bestScore) { bestScore = score; bestId = i; }
       });
       if (bestId >= 0) {

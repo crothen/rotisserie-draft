@@ -1351,6 +1351,7 @@ function filterPool(v) {
     name: (a, b) => state.pool[a].n.localeCompare(state.pool[b].n),
     cmc: (a, b) => state.pool[a].v - state.pool[b].v || state.pool[a].n.localeCompare(state.pool[b].n),
     color: (a, b) => (state.pool[a].c || 'Z').localeCompare(state.pool[b].c || 'Z') || state.pool[a].v - state.pool[b].v,
+    rating: (a, b) => (state.pool[b].e || 0) - (state.pool[a].e || 0) || state.pool[a].n.localeCompare(state.pool[b].n),
   };
   if (state.filters.sort !== 'pool') out.sort(by[state.filters.sort]);
   return out;
@@ -1367,7 +1368,7 @@ function poolHtml(v) {
       <div class="row2">
         <input type="text" id="pool-search" placeholder="Search name or type…" value="${esc(f.search)}">
         <select id="pool-sort">
-          ${[['pool', 'Cube order'], ['name', 'Name'], ['cmc', 'Mana value'], ['color', 'Color']]
+          ${[['pool', 'Cube order'], ['name', 'Name'], ['cmc', 'Mana value'], ['color', 'Color'], ['rating', 'Rating']]
             .map(([val, lbl]) => `<option value="${val}" ${f.sort === val ? 'selected' : ''}>${lbl}</option>`).join('')}
         </select>
       </div>
