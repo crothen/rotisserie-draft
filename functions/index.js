@@ -103,6 +103,89 @@ async function sendPush(draftId, pid, payload) {
   }
 }
 
+// Card pools can exceed Firestore's 1MB document limit (set drafts
+// with rarity multipliers), so they are stored chunked:
+// meta/pool {cards, chunks} plus meta/pool_1, pool_2, …
+async function readPool(draftId) {
+  const head = await db.doc(`rd-drafts/${draftId}/meta/pool`).get();
+  if (!head.exists) return [];
+  const data = head.data();
+  let cards = data.cards || [];
+  for (let i = 1; i < (data.chunks || 1); i++) {
+    const part = await db.doc(`rd-drafts/${draftId}/meta/pool_${i}`).get();
+    if (part.exists) cards = cards.concat(part.data().cards || []);
+  }
+  return cards;
+}
+
+// ---------------------------------------------------------------
+// HTTP: Scryfall set catalog, cached in Firestore. GET returns the
+// cache (refreshing when stale/missing); POST with the owner's token
+// forces a sync.
+// ---------------------------------------------------------------
+const SETS_MAX_AGE_MS = 7 * 24 * 3600e3;
+const SET_TYPES = new Set([
+  'core', 'expansion', 'masters', 'draft_innovation', 'commander',
+  'masterpiece', 'remastered', 'starter', 'funny', 'box', 'from_the_vault',
+  'premium_deck', 'duel_deck', 'archenemy', 'planechase', 'spellbook',
+]);
+
+// Scryfall rejects requests with a default HTTP-library User-Agent.
+const SCRYFALL_HEADERS = {
+  'User-Agent': 'rotisserie-draft.ch/1.0 (+https://rotisserie-draft.ch)',
+  Accept: 'application/json',
+};
+
+async function syncSets() {
+  const res = await fetch('https://api.scryfall.com/sets', { headers: SCRYFALL_HEADERS });
+  if (!res.ok) throw new Error('Scryfall sets error ' + res.status);
+  const data = await res.json();
+  const sets = (data.data || [])
+    .filter((s) => !s.digital && SET_TYPES.has(s.set_type) && (s.card_count || 0) >= 30)
+    .map((s) => ({
+      code: s.code,
+      name: s.name,
+      type: s.set_type,
+      released: s.released_at || '',
+      count: s.card_count || 0,
+    }))
+    .sort((a, b) => (b.released || '').localeCompare(a.released || ''));
+  // the catalog is ~1000 entries; keep it inside one document
+  await db.doc('rd-meta/sets').set({ sets, at: Date.now() });
+  return sets;
+}
+
+exports.rdSets = onRequest({ cors: true }, async (req, res) => {
+  try {
+    if (req.method === 'POST') {
+      let decoded;
+      try { decoded = await requireAuth(req); } catch {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      if (emailHash(decoded) !== OWNER_HASH) {
+        res.status(403).json({ error: 'Not the site administrator' });
+        return;
+      }
+      const sets = await syncSets();
+      res.json({ sets, at: Date.now(), synced: true });
+      return;
+    }
+    const snap = await db.doc('rd-meta/sets').get();
+    const cached = snap.exists ? snap.data() : null;
+    if (cached && Date.now() - (cached.at || 0) < SETS_MAX_AGE_MS) {
+      res.json({ sets: cached.sets || [], at: cached.at });
+      return;
+    }
+    const sets = await syncSets();
+    res.json({ sets, at: Date.now(), synced: true });
+  } catch (e) {
+    const snap = await db.doc('rd-meta/sets').get().catch(() => null);
+    if (snap?.exists) { res.json({ sets: snap.data().sets || [], at: snap.data().at, stale: true }); return; }
+    res.status(502).json({ error: e.message });
+  }
+});
+
 // ---------------------------------------------------------------
 // HTTP: CubeCobra proxy (CubeCobra has no CORS headers)
 // Returns [{name, elo}] — elo feeds bot picks. Falls back to the
@@ -262,6 +345,7 @@ exports.rdPick = onRequest({ cors: true }, async (req, res) => {
     return;
   }
   const dRef = db.doc(`rd-drafts/${draftId}`);
+  const poolCards = await readPool(draftId);
   try {
     await db.runTransaction(async (t) => {
       const snap = await t.get(dRef);
@@ -277,8 +361,7 @@ exports.rdPick = onRequest({ cors: true }, async (req, res) => {
       if (picks.length >= seq.length) throw new Error('The draft is complete');
       if (d.order[seq[picks.length]] !== pid) throw new Error('It is not your turn');
       if (picks.some((p) => p.c === cardId)) throw new Error('That card was just picked');
-      const poolSnap = await t.get(db.doc(`rd-drafts/${draftId}/meta/pool`));
-      const pool = poolSnap.exists ? poolSnap.data().cards || [] : [];
+      const pool = poolCards;
       if (cardId >= pool.length) throw new Error('Unknown card');
       t.update(dRef, {
         picks: [...picks, { p: pid, c: cardId, n: pool[cardId].n, at: Date.now() }],
@@ -525,8 +608,7 @@ exports.rdOnDraftWrite = onDocumentWritten(
     // the bot's colors. Colorless cards get a partial fits-anywhere
     // bonus. Jitter breaks ties (pure random for elo-less pools). ---
     if (after.players?.[curPid]?.bot) {
-      const poolSnap = await db.doc(`rd-drafts/${draftId}/meta/pool`).get();
-      const pool = poolSnap.exists ? poolSnap.data().cards || [] : [];
+      const pool = await readPool(draftId);
       const counts = { W: 0, U: 0, B: 0, R: 0, G: 0 };
       for (const p of picks) {
         if (p.p !== curPid) continue;

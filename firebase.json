@@ -35,6 +35,13 @@
         }
       },
       {
+        "source": "/api/rd/sets",
+        "function": {
+          "functionId": "rdSets",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "/api/rd/claim",
         "function": {
           "functionId": "rdClaim",

@@ -89,6 +89,11 @@ service cloud.firestore {
       allow delete: if isDraftAdmin(draftId);
     }
 
+    // Scryfall set catalog cache: written only by the rdSets function
+    match /rd-meta/{docId} {
+      allow read, write: if false;
+    }
+
     // Per-user draft membership index for the dashboard
     match /rd-users/{uid} {
       allow read: if request.auth != null && request.auth.uid == uid;

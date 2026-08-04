@@ -55,7 +55,7 @@ const state = {
   creds: null,       // {pid, secret, name, draftName}
   tab: 'pool',
   selPlayer: null,
-  filters: { search: '', colors: new Set(), types: new Set(), hidePicked: false, sort: 'pool' },
+  filters: { search: '', colors: new Set(), types: new Set(), sets: new Set(), hidePicked: false, sort: 'pool' },
   groupByType: true,
   deckView: 'list',
   gridMode: 'names',
@@ -69,6 +69,9 @@ const state = {
   chatOpen: false,
   chatDraft: '', // survives re-renders triggered by incoming messages
   seatBound: false, // this device's auth uid is bound to my seat
+  newSource: 'cube',   // card pool source on the /new page
+  newSets: [],         // chosen sets for a set-based draft
+  setCatalog: null,    // cached Scryfall set list
 };
 
 // Push is "on" only if THIS device's subscription is registered in my
@@ -330,7 +333,14 @@ function subscribeDraft() {
 
 async function loadPool() {
   const snap = await getDoc(doc(db, 'rd-drafts', state.draftId, 'meta', 'pool'));
-  state.pool = snap.exists() ? snap.data().cards : [];
+  if (!snap.exists()) { state.pool = []; return; }
+  const data = snap.data();
+  let cards = data.cards || [];
+  for (let i = 1; i < (data.chunks || 1); i++) {
+    const part = await getDoc(doc(db, 'rd-drafts', state.draftId, 'meta', `pool_${i}`));
+    if (part.exists()) cards = cards.concat(part.data().cards || []);
+  }
+  state.pool = cards;
 }
 
 function subscribeMyPriv() {
@@ -774,6 +784,11 @@ function renderSiteAdmin() {
         <div id="dash-all"><p class="hint">Loading…</p></div>
       </div>
       <div class="panel">
+        <h2 style="margin-top:0">Set catalog</h2>
+        <p class="hint" id="sets-info">Loading…</p>
+        <button class="btn btn-sm" id="sync-sets">Sync sets from Scryfall</button>
+      </div>
+      <div class="panel">
         <h2 style="margin-top:0">Contact messages</h2>
         <div id="dash-contact"><p class="hint">Loading…</p></div>
       </div>
@@ -781,6 +796,24 @@ function renderSiteAdmin() {
     </div>`;
   bindTopbar();
   loadOwnerDashboard();
+  const showSets = (d) => {
+    const el = $('#sets-info');
+    if (el) {
+      el.textContent = `${(d.sets || []).length} sets cached` +
+        (d.at ? ` · last synced ${new Date(d.at).toLocaleString()}` : '');
+    }
+  };
+  fetch('/api/rd/sets').then((r) => r.json()).then(showSets).catch(() => {});
+  $('#sync-sets')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      const d = await apiPost('/api/rd/sets', {});
+      state.setCatalog = d.sets || null;
+      showSets(d);
+      toast(`Synced ${(d.sets || []).length} sets.`);
+    } catch (err) { toast(err.message, true); }
+    e.target.disabled = false;
+  });
 }
 
 function renderNew() {
@@ -793,11 +826,41 @@ function renderNew() {
         (1→8, 8→1, …). After a while players pick 2 cards per turn.</p>
         <div class="field"><label>Draft name</label>
           <input type="text" id="c-name" placeholder="e.g. Legacy Cube Rotisserie 2026"></div>
-        <div class="field"><label>CubeCobra link or cube id</label>
-          <input type="text" id="c-cube" placeholder="https://cubecobra.com/cube/list/cr_cu_cube"></div>
-        <div class="field">
-          <label><input type="checkbox" id="c-usetext"> …or paste a card list instead</label>
-          <textarea id="c-text" style="display:none" placeholder="1 Lightning Bolt\n2 Squadron Hawk\nBrainstorm"></textarea>
+        <div class="field"><label>Card pool</label>
+          <div class="viewtoggle">
+            <button class="mini-chip active" data-src="cube">CubeCobra</button>
+            <button class="mini-chip" data-src="sets">Sets</button>
+            <button class="mini-chip" data-src="list">Card list</button>
+          </div>
+        </div>
+        <div class="field src-pane" data-pane="cube">
+          <label>CubeCobra link or cube id</label>
+          <input type="text" id="c-cube" placeholder="https://cubecobra.com/cube/list/cr_cu_cube">
+        </div>
+        <div class="field src-pane" data-pane="list" style="display:none">
+          <label>Card list (one per line, "2 Card Name" for copies)</label>
+          <textarea id="c-text" placeholder="1 Lightning Bolt\n2 Squadron Hawk\nBrainstorm"></textarea>
+        </div>
+        <div class="src-pane" data-pane="sets" style="display:none">
+          <div class="field"><label>Sets in the pool</label>
+            <div class="setchips" id="c-setchips"></div>
+            <input type="text" id="c-setsearch" placeholder="Search sets by name or code…" autocomplete="off">
+            <div class="setlist" id="c-setlist"><p class="hint">Loading sets…</p></div>
+          </div>
+          <div class="field"><label>Copies of each card by rarity</label>
+            <div class="row">
+              <div class="field"><label>Common</label>
+                <input type="number" id="c-rc" value="3" min="0" max="10"></div>
+              <div class="field"><label>Uncommon</label>
+                <input type="number" id="c-ru" value="2" min="0" max="10"></div>
+              <div class="field"><label>Rare</label>
+                <input type="number" id="c-rr" value="1" min="0" max="10"></div>
+              <div class="field"><label>Mythic</label>
+                <input type="number" id="c-rm" value="1" min="0" max="10"></div>
+            </div>
+            <p class="hint" id="c-setinfo">Basic lands are excluded. The pool size updates as you
+              pick sets.</p>
+          </div>
         </div>
         <div class="row">
           <div class="field"><label>Players</label>
@@ -828,10 +891,14 @@ function renderNew() {
       </div>
     </div>`;
   bindTopbar();
-  $('#c-usetext').addEventListener('change', (e) => {
-    $('#c-text').style.display = e.target.checked ? 'block' : 'none';
-    $('#c-cube').disabled = e.target.checked;
-  });
+  $$('[data-src]').forEach((b) => b.addEventListener('click', () => {
+    state.newSource = b.dataset.src;
+    $$('[data-src]').forEach((x) => x.classList.toggle('active', x.dataset.src === state.newSource));
+    $$('.src-pane').forEach((p) => {
+      p.style.display = p.dataset.pane === state.newSource ? 'block' : 'none';
+    });
+    if (state.newSource === 'sets') loadSetCatalog();
+  }));
   $('#c-go')?.addEventListener('click', createDraft);
   $('#c-signin')?.addEventListener('click', async () => {
     try {
@@ -839,6 +906,121 @@ function renderNew() {
       // auth listener re-renders with the create button enabled
     } catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.message, true); }
   });
+  $('#c-setsearch')?.addEventListener('input', renderSetList);
+  ['#c-rc', '#c-ru', '#c-rr', '#c-rm'].forEach((id) => $(id)?.addEventListener('input', renderSetChips));
+}
+
+// ---------- set picker ----------
+async function loadSetCatalog() {
+  if (state.setCatalog) { renderSetChips(); renderSetList(); return; }
+  try {
+    const res = await fetch('/api/rd/sets');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load sets');
+    state.setCatalog = data.sets || [];
+  } catch (e) {
+    const el = $('#c-setlist');
+    if (el) el.innerHTML = `<p class="hint">Could not load the set list: ${esc(e.message)}</p>`;
+    return;
+  }
+  renderSetChips();
+  renderSetList();
+}
+
+function renderSetList() {
+  const el = $('#c-setlist');
+  if (!el || !state.setCatalog) return;
+  const q = ($('#c-setsearch')?.value || '').trim().toLowerCase();
+  const picked = new Set(state.newSets.map((s) => s.code));
+  const matches = state.setCatalog
+    .filter((s) => !picked.has(s.code))
+    .filter((s) => !q || s.name.toLowerCase().includes(q) || s.code.includes(q))
+    .slice(0, q ? 40 : 25);
+  el.innerHTML = matches.length
+    ? matches.map((s) => `<button class="setrow" data-setcode="${esc(s.code)}">
+        <span class="setcode">${esc(s.code.toUpperCase())}</span>
+        <span class="setname">${esc(s.name)}</span>
+        <span class="setmeta">${esc((s.released || '').slice(0, 4))} · ${s.count} cards</span>
+      </button>`).join('')
+    : '<p class="hint">No matching sets.</p>';
+  $$('[data-setcode]', el).forEach((b) => b.addEventListener('click', () => {
+    const set = state.setCatalog.find((s) => s.code === b.dataset.setcode);
+    if (set && !state.newSets.some((s) => s.code === set.code)) state.newSets.push(set);
+    renderSetChips();
+    renderSetList();
+  }));
+}
+
+function renderSetChips() {
+  const el = $('#c-setchips');
+  if (!el) return;
+  el.innerHTML = state.newSets.length
+    ? state.newSets.map((s) => `<span class="chip active">${esc(s.name)}
+        <button class="chipx" data-unset="${esc(s.code)}" title="Remove">✕</button></span>`).join('')
+    : '<span class="hint">No sets selected yet.</span>';
+  $$('[data-unset]', el).forEach((b) => b.addEventListener('click', () => {
+    state.newSets = state.newSets.filter((s) => s.code !== b.dataset.unset);
+    renderSetChips();
+    renderSetList();
+  }));
+  const info = $('#c-setinfo');
+  if (info && state.newSets.length) {
+    const raw = state.newSets.reduce((n, s) => n + (s.count || 0), 0);
+    const c = +($('#c-rc')?.value || 3), u = +($('#c-ru')?.value || 2);
+    const r = +($('#c-rr')?.value || 1), m = +($('#c-rm')?.value || 1);
+    // rough set composition: ~35% common, ~35% uncommon, ~22% rare, ~8% mythic
+    const est = Math.round(raw * (0.35 * c + 0.35 * u + 0.22 * r + 0.08 * m) * 0.8);
+    info.textContent = `${state.newSets.length} set(s), roughly ${est} cards in the pool ` +
+      `(about ${raw} printings listed; basic lands, variants and non-booster cards are excluded).`;
+  }
+}
+
+// Fetch every non-basic card of the chosen sets from Scryfall and
+// duplicate entries per the rarity multipliers.
+async function buildSetPool(sets, mult, statusEl) {
+  const cards = [];
+  for (let i = 0; i < sets.length; i++) {
+    const code = sets[i].code;
+    // unique=cards keeps each card once (showcase/extended-art variants
+    // would otherwise inflate the rare slots); is:booster keeps the pool
+    // to what actually appears in draft boosters
+    let url = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(`e:${code} -t:basic is:booster`)}&unique=cards&order=set`;
+    let page = 0;
+    while (url && page < 12) {
+      statusEl.textContent = `Loading ${code.toUpperCase()} (${i + 1}/${sets.length})… ${cards.length} cards`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        if (res.status === 404) break; // set has no matching cards
+        throw new Error(`Scryfall error ${res.status} for set ${code}`);
+      }
+      const data = await res.json();
+      for (const card of data.data || []) {
+        const copies = mult[card.rarity] ?? 1;
+        if (!copies) continue;
+        const info = { ...extractScryfallCard(card), e: 0, s: card.set };
+        for (let k = 0; k < copies; k++) cards.push(info);
+      }
+      url = data.has_more ? data.next_page : null;
+      page++;
+      await sleep(110);
+    }
+  }
+  return cards;
+}
+
+// Pool storage is chunked so big set pools stay under the 1MB document
+// limit: meta/pool {cards, chunks} plus meta/pool_1, pool_2, …
+async function writePool(draftId, cards) {
+  const CHUNK = 500;
+  const chunks = Math.max(1, Math.ceil(cards.length / CHUNK));
+  await setDoc(doc(db, 'rd-drafts', draftId, 'meta', 'pool'), {
+    cards: cards.slice(0, CHUNK), chunks,
+  });
+  for (let i = 1; i < chunks; i++) {
+    await setDoc(doc(db, 'rd-drafts', draftId, 'meta', `pool_${i}`), {
+      cards: cards.slice(i * CHUNK, (i + 1) * CHUNK),
+    });
+  }
 }
 
 // Dashboard: merge drafts from this device (localStorage) with drafts
@@ -1179,17 +1361,51 @@ async function createDraft() {
   const totalPicks = Math.max(4, parseInt($('#c-total').value, 10) || 40);
   const singleRounds = Math.max(0, Math.min(totalPicks, parseInt($('#c-single').value, 10) || 0));
   const reminderHours = Math.max(0, parseInt($('#c-remind').value, 10) || 0);
-  const useText = $('#c-usetext').checked;
+  const source = state.newSource || 'cube';
 
   btn.disabled = true;
   try {
+    // ---- set-based pool: build straight from Scryfall and store ----
+    if (source === 'sets') {
+      if (!state.newSets.length) throw new Error('Pick at least one set.');
+      const mult = {
+        common: Math.max(0, parseInt($('#c-rc').value, 10) || 0),
+        uncommon: Math.max(0, parseInt($('#c-ru').value, 10) || 0),
+        rare: Math.max(0, parseInt($('#c-rr').value, 10) || 0),
+        mythic: Math.max(0, parseInt($('#c-rm').value, 10) || 0),
+        special: 1, bonus: 1,
+      };
+      const setPool = await buildSetPool(state.newSets, mult, statusEl);
+      const need = players * totalPicks;
+      if (setPool.length < need) {
+        throw new Error(`The chosen sets give ${setPool.length} cards but ${players} players × ${totalPicks} picks needs ${need}. Add a set or raise the rarity copies.`);
+      }
+      statusEl.textContent = 'Creating draft…';
+      const draftId = rid(12);
+      await setDoc(doc(db, 'rd-drafts', draftId), {
+        name, cubeUrl: '', createdAt: Date.now(),
+        adminUid: realUser().uid,
+        status: 'lobby',
+        source: 'sets',
+        sets: state.newSets.map((s) => ({ code: s.code, name: s.name })),
+        rarityCopies: { common: mult.common, uncommon: mult.uncommon, rare: mult.rare, mythic: mult.mythic },
+        settings: { players, totalPicks, singleRounds, reminderHours },
+        players: {}, uids: {}, order: [], picks: [],
+        turnStartedAt: null, lastReminderAt: null,
+      });
+      await writePool(draftId, setPool);
+      saveCreds(draftId, { draftName: name });
+      await recordMembership(draftId, name, 'admin');
+      location.href = `${BASE}?d=${draftId}`;
+      return;
+    }
     let cubeCards, cubeUrl = ''; // [{name, elo, customId}]
-    if (useText) {
+    if (source === 'list') {
       cubeCards = parseTextList($('#c-text').value).map((name) => ({ name, elo: 0, customId: null }));
       if (!cubeCards.length) throw new Error('Card list is empty.');
     } else {
       const cubeId = parseCubeId($('#c-cube').value);
-      if (!cubeId) throw new Error('Enter a CubeCobra link (or check "paste a card list").');
+      if (!cubeId) throw new Error('Enter a CubeCobra link, or switch the card pool to Sets or Card list.');
       cubeUrl = `https://cubecobra.com/cube/list/${cubeId}`;
       statusEl.textContent = 'Fetching cube from CubeCobra…';
       const res = await fetch(`/api/rd/fetchCube?cube=${encodeURIComponent(cubeId)}`);
@@ -1231,7 +1447,7 @@ async function createDraft() {
       players: {}, uids: {}, order: [], picks: [],
       turnStartedAt: null, lastReminderAt: null,
     });
-    await setDoc(doc(db, 'rd-drafts', draftId, 'meta', 'pool'), { cards: pool });
+    await writePool(draftId, pool);
     saveCreds(draftId, { draftName: name });
     await recordMembership(draftId, name, 'admin');
     location.href = `${BASE}?d=${draftId}`;
@@ -1284,6 +1500,8 @@ function renderLobby() {
             <div><span class="spec-l">Then</span><span class="spec-v">2 per turn</span></div>
             <div><span class="spec-l">Reminder</span><span class="spec-v">${s.reminderHours ? s.reminderHours + 'h' : 'off'}</span></div>
             ${d.cubeUrl ? `<div><span class="spec-l">Source</span><span class="spec-v"><a href="${esc(d.cubeUrl)}" target="_blank" rel="noopener">cube ↗</a></span></div>` : ''}
+            ${d.sets?.length ? `<div><span class="spec-l">Sets</span><span class="spec-v">${d.sets.map((x) => esc(x.code.toUpperCase())).join(', ')}</span></div>` : ''}
+            ${d.rarityCopies ? `<div><span class="spec-l">Copies (C/U/R/M)</span><span class="spec-v">${d.rarityCopies.common}/${d.rarityCopies.uncommon}/${d.rarityCopies.rare}/${d.rarityCopies.mythic}</span></div>` : ''}
           </div>
           <div class="seats">${seats.join('')}</div>
           <p class="hint">The draft begins when the creator starts it — the seat order is randomized then.</p>
@@ -1888,6 +2106,13 @@ function manaHtml(cost) {
   });
 }
 
+// Sets represented in this draft's pool (set-based drafts only)
+function poolSets() {
+  const declared = state.draft?.sets;
+  if (declared?.length) return declared;
+  return [];
+}
+
 // ---------- pool ----------
 const COLOR_FILTERS = [
   ['W', msImg('W', 'ms msf')], ['U', msImg('U', 'ms msf')], ['B', msImg('B', 'ms msf')],
@@ -1919,6 +2144,7 @@ function filterPool(v) {
       for (const ty of f.types) if (c.t.includes(ty)) ok = true;
       if (!ok) return;
     }
+    if (f.sets.size && !f.sets.has(c.s)) return;
     out.push(i);
   });
   const by = {
@@ -1954,6 +2180,9 @@ function poolHtml(v) {
       <div class="row2">
         ${TYPE_FILTERS.map((t) => `<button class="mini-chip ${f.types.has(t) ? 'active' : ''}" data-type="${t}">${t}</button>`).join('')}
       </div>
+      ${poolSets().length > 1 ? `<div class="row2">
+        ${poolSets().map((st) => `<button class="mini-chip ${f.sets.has(st.code) ? 'active' : ''}" data-set="${esc(st.code)}" title="${esc(st.name)}">${esc(st.code.toUpperCase())}</button>`).join('')}
+      </div>` : ''}
     </div>
     <div class="pool-count">${ids.length} shown · ${availTotal}/${state.pool.length} still available${ids.length > 400 ? ' · showing first 400, refine your filter' : ''}</div>
     <div class="card-grid">
@@ -1987,6 +2216,11 @@ function bindPool(v) {
   $$('[data-type]').forEach((b) => b.addEventListener('click', () => {
     const t = b.dataset.type;
     state.filters.types.has(t) ? state.filters.types.delete(t) : state.filters.types.add(t);
+    render();
+  }));
+  $$('[data-set]').forEach((b) => b.addEventListener('click', () => {
+    const st = b.dataset.set;
+    state.filters.sets.has(st) ? state.filters.sets.delete(st) : state.filters.sets.add(st);
     render();
   }));
   $$('[data-card]').forEach((el) => el.addEventListener('click', () => openCardModal(+el.dataset.card)));
@@ -2557,6 +2791,8 @@ async function deleteDraft() {
     await Promise.all(privSnaps.docs.map((d) => deleteDoc(d.ref)));
     const chatSnaps = await getDocs(collection(db, 'rd-drafts', state.draftId, 'chat'));
     await Promise.all(chatSnaps.docs.map((d) => deleteDoc(d.ref)));
+    const metaSnaps = await getDocs(collection(db, 'rd-drafts', state.draftId, 'meta'));
+    await Promise.all(metaSnaps.docs.map((d) => deleteDoc(d.ref)));
     await deleteDoc(doc(db, 'rd-drafts', state.draftId, 'meta', 'pool'));
     await deleteDoc(doc(db, 'rd-drafts', state.draftId));
     const all = allCreds();
