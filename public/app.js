@@ -191,6 +191,7 @@ function myPid() { return state.creds?.pid || null; }
 function realUser() {
   return state.user && !state.user.isAnonymous ? state.user : null;
 }
+function isArchived() { return !!state.draft?.archived; }
 function isAdmin() {
   const u = realUser();
   return !!u && (state.draft?.adminUid === u.uid || !!state.ownerOk);
@@ -658,7 +659,7 @@ async function loadLandingDrafts() {
       const snap = await getDoc(doc(db, 'rd-drafts', id));
       if (!snap.exists()) return null;
       const d = snap.data();
-      if (d.status === 'done') return null;
+      if (d.status === 'done' || d.archived) return null;
       return dashRow(id, d, { admin: e.admin, pid: e.pid });
     } catch { return null; }
   }));
@@ -1076,7 +1077,10 @@ function dashRow(id, d, { admin = false, pid = null, ownerMode = false, watchMod
   }
   const playerNames = Object.values(d.players || {}).map((p) => p.name);
   let statusTxt = '', myTurn = false, sortKey = 0;
-  if (d.status === 'lobby') {
+  if (d.archived) {
+    statusTxt = 'Archived — read only';
+    sortKey = 4;
+  } else if (d.status === 'lobby') {
     statusTxt = `Lobby — waiting for players (${playerNames.length}/${s.players})`;
     sortKey = 2;
   } else if (d.status === 'done') {
@@ -1098,7 +1102,9 @@ function dashRow(id, d, { admin = false, pid = null, ownerMode = false, watchMod
   ].join(' · ');
   const href = watchMode ? `${BASE}?d=${id}&w=1` : `${BASE}?d=${id}`;
   admin = admin || (!!realUser() && d.adminUid === realUser().uid);
-  const tag = watchMode
+  const tag = d.archived
+    ? '<span class="droptag" title="read only">ARCHIVED</span>'
+    : watchMode
     ? '<span class="dash-as">watching</span>'
     : myName ? `<span class="dash-as">as ${esc(myName)}</span>` : '<span class="dash-as">not joined</span>';
   return {
@@ -1506,7 +1512,7 @@ function renderLobby() {
           <div class="seats">${seats.join('')}</div>
           <p class="hint">The draft begins when the creator starts it — the seat order is randomized then.</p>
 
-          ${!joined ? `
+          ${isArchived() ? '<p class="hint">This draft is archived — read only.</p>' : !joined ? `
           <div class="joinblock">
             <h2>Take a seat</h2>
             <div class="join-row">
@@ -1624,7 +1630,7 @@ function renderDraft() {
   const myTurn = v.curPid && v.curPid === me;
 
   let tabMode = null;
-  if (!v.done && me) {
+  if (!v.done && me && !isArchived()) {
     if (myTurn) tabMode = 'mine';
     else {
       // am I the next distinct player after the current turn?
@@ -1648,11 +1654,12 @@ function renderDraft() {
 
   $('#app').innerHTML = `
     ${topbar(d.name,
-      v.done ? 'Draft complete' : (state.watcher && !me ? 'Watching live' : 'Drafting…'),
+      isArchived() ? 'Archived — read only'
+        : v.done ? 'Draft complete' : (state.watcher && !me ? 'Watching live' : 'Drafting…'),
       !!me)}
     <div class="container">
       ${turnBannerHtml(v, me)}
-      ${!v.done && me && !d.players[me]?.dropped ? pickbarHtml(myTurn) : ''}
+      ${!v.done && me && !isArchived() && !d.players[me]?.dropped ? pickbarHtml(myTurn) : ''}
       ${me && d.players[me]?.dropped ? '<p class="hint">You were dropped from this draft — your turns are skipped. Ask the admin to bring you back.</p>' : ''}
       <div class="tabs">
         ${tabs.map(([id, lbl]) => `<button class="tab-btn ${state.tab === id ? 'active' : ''}" data-tab="${id}">${lbl}</button>`).join('')}
@@ -1884,14 +1891,14 @@ function chatHtml() {
         </div>`).join('')
       : '<p class="hint">No messages yet. Say hello! Type / to reference a card.</p>'}
     </div>
-    <div class="chat-form">
+    ${isArchived() ? '<p class="hint">This draft is archived — the chat is read only.</p>' : `<div class="chat-form">
       <div class="ac-wrap">
         <input type="text" id="chat-input" maxlength="500" placeholder="Message… ( / for a card )"
           autocomplete="off" value="${esc(state.chatDraft || '')}">
         <div class="ac-list chat-ac" id="chat-ac" style="display:none"></div>
       </div>
       <button class="btn btn-primary" id="chat-send">Send</button>
-    </div>`;
+    </div>`}`;
 }
 
 function bindChat() {
@@ -2241,7 +2248,7 @@ function openCardModal(cardId) {
       ? `Picked by <b>${esc(picker || '?')}</b> (pick ${v.picks.indexOf(pick) + 1})`
       : 'Available'}</div>
     <div class="modal-actions">
-      ${!picked && me && !v.done ? `
+      ${!picked && me && !v.done && !isArchived() ? `
         <button class="btn btn-primary" id="m-pick" ${myTurn ? '' : 'disabled'}>${myTurn ? 'Pick now' : 'Not your turn'}</button>
         <button class="btn" id="m-queue" ${inQueue ? 'disabled' : ''}>${inQueue ? 'In queue' : 'Add to queue'}</button>` : ''}
       <button class="btn" id="m-close">Close</button>
@@ -2301,6 +2308,7 @@ async function setPlayerFlag(pid, field, value) {
 function playersHtml(v) {
   const d = state.draft;
   const own = state.selPlayer === myPid();
+  const canEdit = own && !isArchived();
   const sb = own ? new Set(state.myPriv?.sideboard || []) : new Set();
   const selPicks = v.picks.map((p, gi) => ({ ...p, gi })).filter((p) => p.p === state.selPlayer && !p.skip);
   const mainPicks = selPicks.filter((p) => !sb.has(p.c));
@@ -2313,7 +2321,7 @@ function playersHtml(v) {
   } else if (curve) {
     bodyHtml = curveHtml(mainPicks) + (sbPicks.length
       ? `<h3>Sideboard (${sbPicks.length}) — not in the curve</h3>
-         <div class="pick-rows">${sbPicks.map((p) => pickRowHtml(p, sbActionHtml(p, false))).join('')}</div>`
+         <div class="pick-rows">${sbPicks.map((p) => pickRowHtml(p, canEdit ? sbActionHtml(p, false) : '')).join('')}</div>`
       : '');
   } else {
     let listHtml;
@@ -2329,18 +2337,18 @@ function playersHtml(v) {
         .map((g) => `<div class="type-group"><h3>${g} (${groups[g].length})</h3>
           <div class="pick-rows">${groups[g]
             .sort((a, b) => (state.pool[a.c]?.v || 0) - (state.pool[b.c]?.v || 0))
-            .map((p) => pickRowHtml(p, own ? sbActionHtml(p, true) : '')).join('')}</div></div>`)
+            .map((p) => pickRowHtml(p, canEdit ? sbActionHtml(p, true) : '')).join('')}</div></div>`)
         .join('');
     } else {
       listHtml = `<div class="pick-rows">${mainPicks
-        .map((p) => pickRowHtml(p, own ? sbActionHtml(p, true) : '')).join('')}</div>`;
+        .map((p) => pickRowHtml(p, canEdit ? sbActionHtml(p, true) : '')).join('')}</div>`;
     }
     bodyHtml = listHtml + (own ? `
       <h3>Sideboard (${sbPicks.length})</h3>
       <p class="hint">Only you can see your sideboard. Sideboard cards are excluded from the
         mana curve.</p>
       ${sbPicks.length
-        ? `<div class="pick-rows">${sbPicks.map((p) => pickRowHtml(p, sbActionHtml(p, false))).join('')}</div>`
+        ? `<div class="pick-rows">${sbPicks.map((p) => pickRowHtml(p, canEdit ? sbActionHtml(p, false) : '')).join('')}</div>`
         : '<p class="hint">Empty — use the SB buttons to move cards here.</p>'}` : '');
   }
 
@@ -2455,8 +2463,12 @@ function bindPlayers() {
 function queueHtml(v) {
   if (!myPid()) return '<div class="empty">Join the draft to use a pick queue.</div>';
   const queue = state.myPriv?.queue || [];
-  const myTurn = !v.done && v.curPid === myPid();
+  const myTurn = !v.done && !isArchived() && v.curPid === myPid();
   const topPickable = myTurn && queue[0] && !queue[0].tb && !v.pickedIds.has(queue[0].c);
+  if (isArchived()) {
+    return `<p class="hint">This draft is archived — the queue is read only.</p>
+      ${queue.length ? `<div class="pick-rows">${queue.map((item) => `<div class="pick-row" data-card="${item.c}"><span>${esc(item.n)}</span></div>`).join('')}</div>` : '<div class="empty">Queue is empty.</div>'}`;
+  }
   return `
     <p class="hint">On your turn the <b>top</b> card is picked automatically for you. If someone
     else picked it first, it stays here marked and the draft <b>waits for you</b> —
@@ -2614,7 +2626,12 @@ function renderAdminPanelHtml() {
       </div>
     </div>`}
     <div class="adm-section">
-      <button class="btn btn-sm btn-danger" id="del-draft">Delete this draft</button>
+      <div class="adm-actions">
+        <button class="btn btn-sm" id="archive-draft">${d.archived ? 'Unarchive draft' : 'Archive draft'}</button>
+        <button class="btn btn-sm btn-danger" id="del-draft">Delete this draft</button>
+      </div>
+      <p class="hint">Archiving freezes the draft: it stays visible to everyone but nothing can
+        be picked, queued or posted anymore.</p>
       <p class="hint">Removes the pool, all picks, queues, and every link. Cannot be undone.</p>
     </div>
   </div>`;
@@ -2626,6 +2643,7 @@ async function bindAdminPanel() {
   $('#start-draft')?.addEventListener('click', startDraft);
   $('#add-bot')?.addEventListener('click', addBot);
   $('#del-draft')?.addEventListener('click', deleteDraft);
+  $('#archive-draft')?.addEventListener('click', toggleArchive);
   $('#adm-remind-save')?.addEventListener('click', async () => {
     const h = Math.max(0, parseInt($('#adm-remind').value, 10) || 0);
     await updateDoc(doc(db, 'rd-drafts', state.draftId), { 'settings.reminderHours': h });
@@ -2774,6 +2792,21 @@ async function saveDraftSettings() {
     toast('Settings saved.');
   } catch (e) { toast(e.message, true); }
   if (btn) btn.disabled = false;
+}
+
+// Archive: freeze a draft read-only without losing it. Admin/creator
+// and the site owner only; reversible.
+async function toggleArchive() {
+  if (!isAdmin() || !state.draft) return;
+  const archiving = !state.draft.archived;
+  if (archiving && !confirm(`Archive "${state.draft.name}"? It stays visible to everyone but nothing can be picked, queued or posted anymore.`)) return;
+  try {
+    await updateDoc(doc(db, 'rd-drafts', state.draftId), {
+      archived: archiving ? true : deleteField(),
+      archivedAt: archiving ? Date.now() : deleteField(),
+    });
+    toast(archiving ? 'Draft archived (read only).' : 'Draft unarchived.');
+  } catch (e) { toast(e.message, true); }
 }
 
 // Cascade-delete the draft and everything linked to it: private docs

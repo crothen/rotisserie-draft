@@ -351,6 +351,7 @@ exports.rdPick = onRequest({ cors: true }, async (req, res) => {
       const snap = await t.get(dRef);
       const d = snap.data();
       if (!d) throw new Error('Draft not found');
+      if (d.archived) throw new Error('This draft is archived (read only)');
       if (d.status !== 'active') throw new Error('The draft is not active');
       const pid = (d.uids || {})[decoded.uid];
       if (!pid || !d.players?.[pid]) throw new Error('You are not seated in this draft');
@@ -447,6 +448,7 @@ exports.rdOnDraftWrite = onDocumentWritten(
   async (event) => {
     if (!event.data.after.exists) return;
     const after = event.data.after.data();
+    if (after.archived) return; // archived drafts are frozen
     const before = event.data.before.exists ? event.data.before.data() : {};
     const draftId = event.params.draftId;
     const ref = event.data.after.ref;
@@ -693,6 +695,7 @@ exports.rdReminder = onSchedule(
       .get();
     for (const docSnap of snaps.docs) {
       const d = docSnap.data();
+      if (d.archived) continue;
       const s = draftSettings(d);
       if (!s.reminderHours || !d.turnStartedAt) continue;
       if (Date.now() - d.turnStartedAt < s.reminderHours * 3600e3) continue;

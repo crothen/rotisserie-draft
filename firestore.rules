@@ -23,6 +23,9 @@ service cloud.firestore {
       return request.auth != null &&
         (request.auth.uid == draftData(draftId).adminUid || isOwner());
     }
+    function isArchived(draftId) {
+      return draftData(draftId).get('archived', false) == true;
+    }
 
     match /rd-drafts/{draftId} {
       allow get: if true;
@@ -42,6 +45,7 @@ service cloud.firestore {
         // uid binding and the own player entry, within the seat cap
         (request.auth != null
           && resource.data.status == 'lobby'
+          && resource.data.get('archived', false) == false
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players', 'uids'])
           && request.resource.data.get('uids', {}).diff(resource.data.get('uids', {}))
                .affectedKeys().hasOnly([request.auth.uid])
@@ -68,6 +72,7 @@ service cloud.firestore {
             || isDraftAdmin(draftId));
       allow update: if request.auth != null
         && resource.data.get('uids', {}).get(request.auth.uid, false) == true
+        && !isArchived(draftId)
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['queue', 'sideboard', 'pushSubs']);
       allow delete: if request.auth != null
@@ -80,6 +85,7 @@ service cloud.firestore {
       allow read: if request.auth != null
         && request.auth.uid in draftData(draftId).get('uids', {});
       allow create: if request.auth != null
+        && !isArchived(draftId)
         && draftData(draftId).get('uids', {}).get(request.auth.uid, '') == request.resource.data.pid
         && request.resource.data.text is string
         && request.resource.data.text.size() >= 1
