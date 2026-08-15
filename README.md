@@ -11,8 +11,16 @@ notifications, pick queues, bots, and a live draft grid.
 
 - Plain HTML/JS/CSS frontend (no build step), Firebase Hosting
 - Firestore for draft state (realtime listeners, client transactions)
+- Card pools: CubeCobra cubes, set-based pools, pasted lists, or **format
+  drafts** — the pool is implicitly "every card legal in X" (Legacy,
+  Vintage, Modern, Premodern, Pioneer, Standard, Pauper). Format drafts
+  store no pool: players browse cached per-format staples or search all
+  legal cards via Scryfall, picks are validated by name server-side and
+  carry their card data, and bots draft from the staples catalog.
 - Cloud Functions (Node 20, us-central1):
   - `rdFetchCube`: CubeCobra proxy, returns `{name, elo}` per card
+  - `rdStaples`: per-format top-1000 staples cache (GET lazy-refresh,
+    owner POST force-sync from the /admin page)
   - `rdPing`: admin pings a player (push)
   - `rdContact`: contact form intake (honeypot + flood guard)
   - `rdInbox`: owner-only contact inbox (Firebase ID token, email hash check)
@@ -21,6 +29,25 @@ notifications, pick queues, bots, and a live draft grid.
     completion notifications
   - `rdReminder`: scheduled nudge for slow pickers
 - Web Push with raw VAPID (no FCM); card data and images from Scryfall
+
+## Card Blind leagues (/4cb)
+
+Four Card Blind (or 3CB, any hand size) as leagues: every round players
+blindly submit an N-card deck, the decks reveal at a deadline, every deck
+plays every other deck (two games, alternating play/draw) and players
+self-report results (WW 6 · WD 4 · WL/DD 2 · DL 1 · LL 0). Conflicting
+reports notify the admin, who sets the final result. The admin curates a
+banlist between rounds; standings and per-round history live on the
+league page. Per-match notes are visible only to the two players and the
+admin.
+
+- Firestore: `cb-leagues/{id}` (+ `rounds`, blind `private` docs the
+  admin cannot read, `matchchat`)
+- Functions: `cbClaim` (seat binding), `cbSubmit` (Scryfall-validated
+  blind submissions: format legality, bans, highlander), `cbRound`
+  (admin ops: start/reveal/deadline/resolve/finish/delete), `cbReport`
+  (self-reported results with dispute detection), `cbChat` (match
+  notes), `cbTick` (scheduled auto-reveal + submission reminders)
 
 ## Setup
 

@@ -2,6 +2,13 @@
   "firestore": {
     "rules": "firestore.rules"
   },
+  "emulators": {
+    "auth": { "port": 9099 },
+    "functions": { "port": 5001 },
+    "firestore": { "port": 8080 },
+    "hosting": { "port": 5000 },
+    "ui": { "enabled": true }
+  },
   "functions": {
     "source": "functions"
   },
@@ -10,6 +17,8 @@
     "ignore": ["firebase.json", "**/node_modules/**"],
     "rewrites": [
       { "source": "/new", "destination": "/index.html" },
+      { "source": "/4cb", "destination": "/index.html" },
+      { "source": "/4cb/rules", "destination": "/index.html" },
       { "source": "/dashboard", "destination": "/index.html" },
       { "source": "/contact", "destination": "/index.html" },
       { "source": "/admin", "destination": "/index.html" },
@@ -59,6 +68,48 @@
         "source": "/api/rd/inbox",
         "function": {
           "functionId": "rdInbox",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/rd/staples",
+        "function": {
+          "functionId": "rdStaples",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/cb/claim",
+        "function": {
+          "functionId": "cbClaim",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/cb/submit",
+        "function": {
+          "functionId": "cbSubmit",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/cb/round",
+        "function": {
+          "functionId": "cbRound",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/cb/report",
+        "function": {
+          "functionId": "cbReport",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/cb/chat",
+        "function": {
+          "functionId": "cbChat",
           "region": "us-central1"
         }
       }

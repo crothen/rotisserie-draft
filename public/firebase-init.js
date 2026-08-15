@@ -1,7 +1,7 @@
 // Firebase init for the standalone rotisserie-draft.ch deployment
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.3.0/firebase-app.js';
-import { getFirestore } from 'https://www.gstatic.com/firebasejs/11.3.0/firebase-firestore.js';
-import { getAuth } from 'https://www.gstatic.com/firebasejs/11.3.0/firebase-auth.js';
+import { getFirestore, connectFirestoreEmulator } from 'https://www.gstatic.com/firebasejs/11.3.0/firebase-firestore.js';
+import { getAuth, connectAuthEmulator } from 'https://www.gstatic.com/firebasejs/11.3.0/firebase-auth.js';
 
 export const firebaseConfig = {
   apiKey: "AIzaSyAfWNM8pNdcx0ePx1J4rUj3v0FDPHXNnYY",
@@ -15,3 +15,10 @@ export const firebaseConfig = {
 export const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+
+// Local dev via `firebase emulators:start`: the hosting emulator serves
+// on 127.0.0.1/localhost, so point the SDK at the local emulators there.
+if (['127.0.0.1', 'localhost'].includes(location.hostname)) {
+  connectFirestoreEmulator(db, location.hostname, 8080);
+  connectAuthEmulator(auth, `http://${location.hostname}:9099`, { disableWarnings: true });
+}

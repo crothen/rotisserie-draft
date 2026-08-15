@@ -267,7 +267,7 @@ p.hint { color: var(--muted); font-size: 13px; margin: 4px 0 10px; }
   display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px;
   text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700;
 }
-input[type="text"], input[type="number"], input[type="url"], select {
+input[type="text"], input[type="number"], input[type="url"], input[type="datetime-local"], select {
   width: 100%; padding: 10px 2px; border: none; border-radius: 0;
   border-bottom: 1px solid var(--border); background: transparent;
   color: var(--text); font-size: 15px; font-family: inherit;
@@ -279,7 +279,8 @@ textarea {
   background: transparent; color: var(--text); font-size: 15px; font-family: inherit;
 }
 input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
-input[type="text"]:focus, input[type="number"]:focus, input[type="url"]:focus, select:focus {
+input[type="text"]:focus, input[type="number"]:focus, input[type="url"]:focus,
+input[type="datetime-local"]:focus, select:focus {
   border-bottom-color: var(--accent);
 }
 textarea { min-height: 120px; resize: vertical; }
@@ -679,3 +680,50 @@ tr.dbl-b td { border-bottom-color: rgba(224, 164, 88, 0.5); }
 .mana-cost { font-size: 12px; color: var(--muted); }
 .empty { color: var(--muted); text-align: center; padding: 30px 10px; font-size: 14px; }
 a { color: var(--accent); }
+
+/* ---------------- Card Blind (4CB) leagues ---------------- */
+.cb-deck { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.cb-card {
+  width: 110px; aspect-ratio: 488 / 680; object-fit: cover; display: block;
+  border: 1px solid var(--border); background: var(--panel); cursor: pointer;
+}
+.cb-card:hover { border-color: var(--accent); }
+.cb-noimg {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  font-size: 12px; color: var(--muted); padding: 6px; cursor: default;
+}
+.cb-deckrow { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.cb-deckrow:last-child { border-bottom: none; }
+.cb-deckname { font-weight: 700; font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
+
+.cb-match {
+  padding: 12px; border: 1px solid var(--border); background: var(--panel);
+  margin-bottom: 10px;
+}
+.cb-match.disputed { border-color: var(--red); }
+.cb-match-head { display: flex; align-items: center; gap: 10px; }
+.cb-match-head .cb-vs { font-weight: 700; flex: 1; }
+.cb-result { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; margin-top: 8px; font-size: 14px; }
+.cb-pts { color: var(--green); font-weight: 700; font-size: 13px; }
+
+.cb-report { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.cb-game { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cb-gamelbl { font-size: 13px; color: var(--muted); min-width: 190px; }
+
+.cb-chat { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.cb-chat-msgs { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.cb-msg { font-size: 13px; }
+.cb-msg b { color: var(--accent); }
+.cb-msg div { white-space: pre-wrap; }
+.cb-chat-send { display: flex; gap: 8px; margin-top: 8px; }
+.cb-chat-send input { flex: 1; }
+
+.cb-table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.cb-table th, .cb-table td {
+  padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left;
+}
+.cb-table th {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.cb-table tr.me td { background: color-mix(in srgb, var(--accent) 10%, transparent); }

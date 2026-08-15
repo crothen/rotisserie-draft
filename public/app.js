@@ -14,12 +14,14 @@ const VAPID_PUBLIC =
   'BBwWu4Duu4THhbcxb1fJofvfaWQgu13WHe6OnvDkHA23yU7fcCfpe-MShsMtsqOc84K_ruonzvVh_Z0M12zsGqY';
 // App root: strips a page segment (/new, /dashboard, /contact) so BASE
 // always points at the app's root path with a trailing slash.
-const ROOT_PATH = location.pathname.replace(/(?:new|dashboard|contact|admin)\/?$/, '');
+const ROOT_PATH = location.pathname.replace(/(?:new|dashboard|contact|admin|4cb(?:\/rules)?)\/?$/, '');
 const BASE = location.origin + ROOT_PATH;
 const URL_NEW = BASE + 'new';
 const URL_DASH = BASE + 'dashboard';
 const URL_CONTACT = BASE + 'contact';
 const URL_ADMIN = BASE + 'admin';
+const URL_4CB = BASE + '4cb';
+const URL_4CB_RULES = BASE + '4cb/rules';
 
 const ICON_BELL_ON =
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>';
@@ -72,6 +74,24 @@ const state = {
   newSource: 'cube',   // card pool source on the /new page
   newSets: [],         // chosen sets for a set-based draft
   setCatalog: null,    // cached Scryfall set list
+  // format drafts (implicit pool)
+  fmtSearch: { q: '', results: null, shown: null, total: null, loading: false },
+  staples: null,       // cached staples for the draft's format
+  staplesLoading: false,
+  // Card Blind league mode (mutually exclusive with draft mode)
+  leagueId: null,
+  league: null,        // main league doc
+  cbRounds: {},        // {n: round doc} — realtime rounds subcollection
+  cbCreds: null,       // {pid, secret, name, leagueName}
+  cbSeatBound: false,
+  cbReportSel: {},     // in-progress report widget picks {matchId: [g1,g2]}
+  cbSubDraft: null,    // submission inputs surviving re-renders
+  cbMatchChats: {},    // {`${n}_${matchId}`: matchchat doc}
+  unsubCbChats: {},    // matchchat listeners by key
+  cbChatOpen: null,    // key of the expanded match chat
+  cbChatDraft: '',     // match chat input surviving re-renders
+  unsubLeague: null,
+  unsubRounds: null,
 };
 
 // Push is "on" only if THIS device's subscription is registered in my
@@ -146,6 +166,17 @@ function saveCreds(draftId, patch) {
   if (draftId === state.draftId) state.creds = all[draftId];
 }
 
+// Same shape for Card Blind leagues: { [leagueId]: {pid, secret, name, leagueName} }
+function allCbCreds() {
+  try { return JSON.parse(localStorage.getItem('cb_creds') || '{}'); } catch { return {}; }
+}
+function saveCbCreds(leagueId, patch) {
+  const all = allCbCreds();
+  all[leagueId] = { ...(all[leagueId] || {}), ...patch };
+  localStorage.setItem('cb_creds', JSON.stringify(all));
+  if (leagueId === state.leagueId) state.cbCreds = all[leagueId];
+}
+
 // ----------------------------------------------------------------
 // Draft logic (mirrored in functions/index.js)
 // ----------------------------------------------------------------
@@ -185,6 +216,24 @@ function draftView(d) {
   const pickedIds = new Set(picks.map((p) => p.c));
   return { s, order, seq, picks, done, curPid, pickedIds };
 }
+// Format drafts have no stored pool — every legal card is available.
+// The client derives a picked-cards-only pool from the pick log (each
+// non-skip pick carries its card data and a stable index `c`).
+function isFormatDraft() { return state.draft?.source === 'format'; }
+function derivedFormatPool(d) {
+  const pool = [];
+  for (const p of d.picks || []) {
+    if (p.skip || !p.card) continue;
+    pool[p.c] = { ...p.card, n: p.n };
+  }
+  return pool;
+}
+function pickedNamesSet() {
+  return new Set((state.draft?.picks || [])
+    .filter((p) => !p.skip)
+    .map((p) => p.n.toLowerCase()));
+}
+
 function myPid() { return state.creds?.pid || null; }
 // The signed-in Google user, if any (anonymous auth sessions are
 // invisible plumbing and never count as "signed in" for the UI).
@@ -272,29 +321,44 @@ async function boot() {
       tryUidRejoin();
       recordMembership();
       render();
-    } else if (!state.draftId) {
+    } else if (state.league) {
+      const ok = await ensureCbSeatBinding();
+      if (ok) subscribeCbPriv();
+      tryCbUidRejoin();
+      recordCbMembership();
+      render();
+    } else if (!state.draftId && !state.leagueId) {
       routeHome(); // re-render so the auth button + dashboard update
     }
   });
   state.draftId = currentPage() === 'landing' ? parseParams() : null;
-  if (!state.draftId) {
+  state.leagueId = currentPage() === '4cb' ? parseCbParams() : null;
+  if (!state.draftId && !state.leagueId) {
     window.addEventListener('hashchange', routeHome);
     routeHome();
     return;
   }
-  // draft mode: the active tab is routed via the hash (#pool, #grid, …)
-  const DRAFT_TABS = ['pool', 'grid', 'players', 'queue', 'admin'];
+  // draft/league mode: the active tab is routed via the hash
+  const TABS = state.leagueId
+    ? ['round', 'standings', 'history', 'players', 'admin']
+    : ['pool', 'grid', 'players', 'queue', 'admin'];
+  if (state.leagueId) state.tab = 'round';
   const initialTab = location.hash.slice(1);
-  if (DRAFT_TABS.includes(initialTab)) state.tab = initialTab;
+  if (TABS.includes(initialTab)) state.tab = initialTab;
   window.addEventListener('hashchange', () => {
     const h = location.hash.slice(1);
-    if (DRAFT_TABS.includes(h) && h !== state.tab) {
+    if (TABS.includes(h) && h !== state.tab) {
       state.tab = h;
       render();
     }
   });
-  state.creds = allCreds()[state.draftId] || null;
-  subscribeDraft();
+  if (state.leagueId) {
+    state.cbCreds = allCbCreds()[state.leagueId] || null;
+    subscribeLeague();
+  } else {
+    state.creds = allCreds()[state.draftId] || null;
+    subscribeDraft();
+  }
 }
 
 function subscribeDraft() {
@@ -307,6 +371,7 @@ function subscribeDraft() {
     }
     const first = !state.draft;
     state.draft = snap.data();
+    if (state.draft.source === 'format') state.pool = derivedFormatPool(state.draft);
     if (first) {
       const existing = allCreds()[state.draftId];
       if (existing) saveCreds(state.draftId, { draftName: state.draft.name });
@@ -472,7 +537,7 @@ async function setTabIndicator(mode) { // 'mine' | 'next' | null
 // Scroll containers whose offsets must survive a re-render (a pick by
 // another player rebuilds the DOM, and losing the position mid-scroll
 // is jarring). Keyed by selector; the chat list sticks to the bottom.
-const SCROLL_KEEP = ['#grid-wrap', '#chat-list', '.curve'];
+const SCROLL_KEEP = ['#grid-wrap', '#chat-list', '.curve', '#cbchat-msgs'];
 
 function render() {
   if (state.dragLock) return; // don't rebuild the DOM mid-drag
@@ -487,12 +552,16 @@ function render() {
     return { sel, top: el.scrollTop, left: el.scrollLeft, atBottom };
   }).filter(Boolean);
   const pageY = window.scrollY;
-  const d = state.draft;
-  if (!d) return;
-  if (d.status === 'lobby') renderLobby();
-  else {
-    if (!state.pool) return; // pool fetch in flight; loadPool() re-renders
-    renderDraft();
+  if (state.league) {
+    renderLeague();
+  } else {
+    const d = state.draft;
+    if (!d) return;
+    if (d.status === 'lobby') renderLobby();
+    else {
+      if (!state.pool) return; // pool fetch in flight; loadPool() re-renders
+      renderDraft();
+    }
   }
   for (const s of scrolls) {
     const el = $(s.sel);
@@ -519,6 +588,8 @@ function currentPage() {
   if (seg === 'dashboard') return 'dashboard';
   if (seg === 'contact') return 'contact';
   if (seg === 'admin') return 'siteadmin';
+  if (seg === '4cb') return '4cb';
+  if (seg === '4cb/rules') return '4cb-rules';
   if (location.hash === '#app') return 'dashboard'; // legacy links
   if (location.hash === '#contact') return 'contact';
   return 'landing';
@@ -530,6 +601,8 @@ function routeHome() {
     case 'dashboard': return renderDashboard();
     case 'contact': return renderContact();
     case 'siteadmin': return renderSiteAdmin();
+    case '4cb': return renderCbHome();
+    case '4cb-rules': return renderCbRules();
     default: return renderLanding(); // the landing is always the main page
   }
 }
@@ -541,6 +614,7 @@ function landingHeader(page) {
       ${page === 'landing'
         ? '<a href="#" data-scroll="how">How it works</a>'
         : `<a href="${BASE}">How it works</a>`}
+      <a href="${URL_4CB}">Card Blind</a>
       <a href="${URL_CONTACT}">Contact</a>
       <button class="btn btn-sm landing-signin">${realUser() ? 'Dashboard' : 'Sign in'}</button>
     </nav>
@@ -566,7 +640,7 @@ function bindLandingChrome() {
 // ----------------------------------------------------------------
 function renderLanding() {
   const signedIn = !!realUser();
-  const hasDrafts = signedIn || Object.keys(allCreds()).length > 0;
+  const hasDrafts = signedIn || Object.keys(allCreds()).length > 0 || Object.keys(allCbCreds()).length > 0;
   $('#app').innerHTML = `
     ${landingHeader('landing')}
     <div class="landing">
@@ -617,6 +691,7 @@ function renderLanding() {
 
       <footer class="landing-footer">
         <span>Built for slow drafting with friends. No ads. No tracking.</span>
+        <a href="${URL_4CB}">Card Blind</a>
         <a href="${URL_CONTACT}">Contact</a>
         <a href="${URL_DASH}">Dashboard</a>
       </footer>
@@ -663,7 +738,9 @@ async function loadLandingDrafts() {
       return dashRow(id, d, { admin: e.admin, pid: e.pid });
     } catch { return null; }
   }));
-  const list = rows.filter(Boolean).sort((a, b) => a.sortKey - b.sortKey || b.at - a.at).slice(0, 6);
+  const leagueRows = (await loadLeagueRows()).filter((r) => r.sortKey < 3); // running leagues only
+  const list = [...rows.filter(Boolean), ...leagueRows]
+    .sort((a, b) => a.sortKey - b.sortKey || b.at - a.at).slice(0, 6);
   if (!list.length) return;
   listEl.innerHTML = list.map((r) => r.html).join('');
   const sec = $('#landing-drafts');
@@ -738,8 +815,13 @@ function renderDashboard() {
           ? '<p class="hint">Loading…</p>'
           : '<p class="hint">No drafts yet. Sign in with Google to see drafts from other devices, or create one below.</p>'}</div>
       </div>
+      <div class="panel" id="dash-leagues-panel" style="display:none">
+        <h2 style="margin-top:0">Your Card Blind leagues</h2>
+        <div id="dash-leagues"><p class="hint">Loading…</p></div>
+      </div>
       <div class="panel newcta">
         <a class="btn btn-cta" href="${URL_NEW}">Start a new draft</a>
+        <a class="btn" href="${URL_4CB}">Card Blind leagues (4CB)</a>
       </div>
       ${Object.keys(watchedList()).length ? `<div class="panel">
         <h2 style="margin-top:0">Watching</h2>
@@ -785,9 +867,20 @@ function renderSiteAdmin() {
         <div id="dash-all"><p class="hint">Loading…</p></div>
       </div>
       <div class="panel">
+        <h2 style="margin-top:0">All Card Blind leagues</h2>
+        <div id="dash-all-leagues"><p class="hint">Loading…</p></div>
+      </div>
+      <div class="panel">
         <h2 style="margin-top:0">Set catalog</h2>
         <p class="hint" id="sets-info">Loading…</p>
         <button class="btn btn-sm" id="sync-sets">Sync sets from Scryfall</button>
+      </div>
+      <div class="panel">
+        <h2 style="margin-top:0">Format staples</h2>
+        <p class="hint">Top ~1000 cards per format by EDHREC rank — the default browse view
+        and the bot brain for format drafts. Auto-refreshes when older than 30 days.</p>
+        <p class="hint" id="staples-info">Loading…</p>
+        <button class="btn btn-sm" id="sync-staples">Sync staples for all formats</button>
       </div>
       <div class="panel">
         <h2 style="margin-top:0">Contact messages</h2>
@@ -815,6 +908,28 @@ function renderSiteAdmin() {
     } catch (err) { toast(err.message, true); }
     e.target.disabled = false;
   });
+  const showStaples = (formats) => {
+    const el = $('#staples-info');
+    if (!el) return;
+    el.innerHTML = formats.map((f) =>
+      `${esc(f.format)}: <b>${f.count}</b>${f.at ? ` (${new Date(f.at).toLocaleDateString()})` : ' (never synced)'}`
+    ).join(' · ');
+  };
+  fetch('/api/rd/staples?meta=1').then((r) => r.json())
+    .then((d) => showStaples(d.formats || [])).catch(() => {});
+  $('#sync-staples')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = 'Syncing… (can take a minute)';
+    try {
+      const d = await apiPost('/api/rd/staples', {});
+      toast('Staples synced: ' + Object.entries(d.counts || {})
+        .map(([f, n]) => `${f} ${n}`).join(', '));
+      const r = await fetch('/api/rd/staples?meta=1').then((x) => x.json());
+      showStaples(r.formats || []);
+    } catch (err) { toast(err.message, true); }
+    e.target.disabled = false;
+    e.target.textContent = 'Sync staples for all formats';
+  });
 }
 
 function renderNew() {
@@ -832,6 +947,7 @@ function renderNew() {
             <button class="mini-chip active" data-src="cube">CubeCobra</button>
             <button class="mini-chip" data-src="sets">Sets</button>
             <button class="mini-chip" data-src="list">Card list</button>
+            <button class="mini-chip" data-src="format">Format</button>
           </div>
         </div>
         <div class="field src-pane" data-pane="cube">
@@ -841,6 +957,15 @@ function renderNew() {
         <div class="field src-pane" data-pane="list" style="display:none">
           <label>Card list (one per line, "2 Card Name" for copies)</label>
           <textarea id="c-text" placeholder="1 Lightning Bolt\n2 Squadron Hawk\nBrainstorm"></textarea>
+        </div>
+        <div class="field src-pane" data-pane="format" style="display:none">
+          <label>Format</label>
+          <select id="c-format">${CB_FORMATS.map(([k, lbl]) =>
+            `<option value="${k}" ${k === 'modern' ? 'selected' : ''}>${lbl}</option>`).join('')}</select>
+          <p class="hint">The pool is <b>every card legal in the format</b> — nothing is stored
+          up front. Players browse the format's top staples and search all legal cards via
+          Scryfall; each card can be drafted once (basic lands excluded — add those when
+          building your deck). Picks are validated for legality on the server.</p>
         </div>
         <div class="src-pane" data-pane="sets" style="display:none">
           <div class="field"><label>Sets in the pool</label>
@@ -1046,6 +1171,17 @@ async function loadDashboard() {
     ? list.map((r) => r.html).join('')
     : '<p class="hint">No drafts yet. Create one below!</p>';
   loadWatchedDrafts();
+  loadDashboardLeagues();
+}
+
+async function loadDashboardLeagues() {
+  const el = $('#dash-leagues');
+  if (!el) return;
+  const rows = await loadLeagueRows();
+  if (!rows.length) return;
+  el.innerHTML = rows.map((r) => r.html).join('');
+  const panel = $('#dash-leagues-panel');
+  if (panel) panel.style.display = 'block';
 }
 
 // Drafts opened via watcher link, shown on the dashboard read-only.
@@ -1152,7 +1288,25 @@ async function loadOwnerDashboard() {
   } catch (e) {
     el.innerHTML = `<p class="hint">Failed to load: ${esc(e.message)}</p>`;
   }
+  loadOwnerLeagues();
   loadContactMessages();
+}
+
+// Site owner: every Card Blind league in the system.
+async function loadOwnerLeagues() {
+  const el = $('#dash-all-leagues');
+  if (!el || !isOwner()) return;
+  try {
+    const snaps = await getDocs(collection(db, 'cb-leagues'));
+    const rows = await Promise.all(
+      snaps.docs.map((snap) => cbDashRow(snap.id, snap.data(), { admin: true })));
+    rows.sort((a, b) => a.sortKey - b.sortKey || b.at - a.at);
+    el.innerHTML = rows.length
+      ? rows.map((r) => r.html).join('')
+      : '<p class="hint">No leagues exist yet.</p>';
+  } catch (e) {
+    el.innerHTML = `<p class="hint">Failed to load: ${esc(e.message)}</p>`;
+  }
 }
 
 async function inboxCall(body) {
@@ -1185,8 +1339,8 @@ function topbar(title, sub = '', showBell = false) {
   return `<div class="topbar">
     <a class="logo" href="${BASE}">RD</a>
     <div class="title">${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ''}</div>
-    ${state.draft ? `<button class="iconbtn" id="share-btn"
-      title="${state.draft.status === 'lobby' ? 'Share the invite link' : 'Share a watcher link'}">${ICON_SHARE}</button>` : ''}
+    ${state.draft || state.league ? `<button class="iconbtn" id="share-btn"
+      title="${state.league || state.draft.status === 'lobby' ? 'Share the invite link' : 'Share a watcher link'}">${ICON_SHARE}</button>` : ''}
     ${showBell ? `<button class="iconbtn ${state.pushOn ? 'on' : ''}" id="bell-btn"
       title="${state.pushOn ? 'Notifications on — click to turn off' : 'Notifications off — click to enable'}">${state.pushOn ? ICON_BELL_ON : ICON_BELL_OFF}</button>` : ''}
     ${realUser()
@@ -1217,6 +1371,11 @@ async function shareOrCopy(url, title, text, label) {
 }
 
 function shareCurrentLink() {
+  if (state.league) {
+    shareOrCopy(`${URL_4CB}?l=${state.leagueId}`, state.league.name,
+      `Join our Card Blind league "${state.league.name}"`, 'Invite link');
+    return;
+  }
   const d = state.draft;
   if (!d) return;
   if (d.status === 'lobby') {
@@ -1405,6 +1564,26 @@ async function createDraft() {
       location.href = `${BASE}?d=${draftId}`;
       return;
     }
+    // ---- format pool: implicit, nothing to fetch or store ----
+    if (source === 'format') {
+      const format = $('#c-format').value;
+      statusEl.textContent = 'Creating draft…';
+      const draftId = rid(12);
+      await setDoc(doc(db, 'rd-drafts', draftId), {
+        name, cubeUrl: '', createdAt: Date.now(),
+        adminUid: realUser().uid,
+        status: 'lobby',
+        source: 'format',
+        format,
+        settings: { players, totalPicks, singleRounds, reminderHours },
+        players: {}, uids: {}, order: [], picks: [],
+        turnStartedAt: null, lastReminderAt: null,
+      });
+      saveCreds(draftId, { draftName: name });
+      await recordMembership(draftId, name, 'admin');
+      location.href = `${BASE}?d=${draftId}`;
+      return;
+    }
     let cubeCards, cubeUrl = ''; // [{name, elo, customId}]
     if (source === 'list') {
       cubeCards = parseTextList($('#c-text').value).map((name) => ({ name, elo: 0, customId: null }));
@@ -1506,6 +1685,7 @@ function renderLobby() {
             <div><span class="spec-l">Then</span><span class="spec-v">2 per turn</span></div>
             <div><span class="spec-l">Reminder</span><span class="spec-v">${s.reminderHours ? s.reminderHours + 'h' : 'off'}</span></div>
             ${d.cubeUrl ? `<div><span class="spec-l">Source</span><span class="spec-v"><a href="${esc(d.cubeUrl)}" target="_blank" rel="noopener">cube ↗</a></span></div>` : ''}
+            ${d.source === 'format' ? `<div><span class="spec-l">Pool</span><span class="spec-v">All of ${esc(cbFormatLabel(d.format))}</span></div>` : ''}
             ${d.sets?.length ? `<div><span class="spec-l">Sets</span><span class="spec-v">${d.sets.map((x) => esc(x.code.toUpperCase())).join(', ')}</span></div>` : ''}
             ${d.rarityCopies ? `<div><span class="spec-l">Copies (C/U/R/M)</span><span class="spec-v">${d.rarityCopies.common}/${d.rarityCopies.uncommon}/${d.rarityCopies.rare}/${d.rarityCopies.mythic}</span></div>` : ''}
           </div>
@@ -1644,7 +1824,7 @@ function renderDraft() {
   if (!state.selPlayer || !d.players[state.selPlayer]) state.selPlayer = me || v.order[0];
 
   const tabs = [
-    ['pool', 'Pool'],
+    ['pool', isFormatDraft() ? 'Search' : 'Pool'],
     ['grid', 'Grid'],
     ['players', 'Decks'],
   ];
@@ -1736,6 +1916,7 @@ function bindPickbar(v, myTurn) {
   const input = $('#pick-input');
   const list = $('#ac-list');
   if (!input) return;
+  if (isFormatDraft()) { bindFormatPickbar(input, list, myTurn); return; }
   let sel = -1, items = [];
 
   const availableNames = () => {
@@ -1844,7 +2025,7 @@ async function setQueue(queue) {
 // ----------------------------------------------------------------
 function tabContentHtml(v) {
   switch (state.tab) {
-    case 'pool': return poolHtml(v);
+    case 'pool': return isFormatDraft() ? formatPoolHtml(v) : poolHtml(v);
     case 'grid': return gridHtml(v);
     case 'players': return playersHtml(v);
     case 'queue': return queueHtml(v);
@@ -1854,7 +2035,7 @@ function tabContentHtml(v) {
 }
 function bindTabContent(v) {
   switch (state.tab) {
-    case 'pool': return bindPool(v);
+    case 'pool': return isFormatDraft() ? bindFormatPool(v) : bindPool(v);
     case 'grid': return bindGrid(v);
     case 'players': return bindPlayers(v);
     case 'queue': return bindQueue(v);
@@ -2215,6 +2396,17 @@ function bindPool(v) {
   });
   $('#pool-sort')?.addEventListener('change', (e) => { state.filters.sort = e.target.value; render(); });
   $('#hide-picked')?.addEventListener('change', (e) => { state.filters.hidePicked = e.target.checked; render(); });
+  bindPoolFilters();
+  $$('[data-set]').forEach((b) => b.addEventListener('click', () => {
+    const st = b.dataset.set;
+    state.filters.sets.has(st) ? state.filters.sets.delete(st) : state.filters.sets.add(st);
+    render();
+  }));
+  $$('[data-card]').forEach((el) => el.addEventListener('click', () => openCardModal(+el.dataset.card)));
+}
+
+// Color/type filter chips, shared by the classic pool and format search.
+function bindPoolFilters() {
   $$('[data-color]').forEach((b) => b.addEventListener('click', () => {
     const c = b.dataset.color;
     state.filters.colors.has(c) ? state.filters.colors.delete(c) : state.filters.colors.add(c);
@@ -2225,16 +2417,259 @@ function bindPool(v) {
     state.filters.types.has(t) ? state.filters.types.delete(t) : state.filters.types.add(t);
     render();
   }));
-  $$('[data-set]').forEach((b) => b.addEventListener('click', () => {
-    const st = b.dataset.set;
-    state.filters.sets.has(st) ? state.filters.sets.delete(st) : state.filters.sets.add(st);
-    render();
+}
+
+// ---------- format-draft pool: staples browse + Scryfall search ----------
+async function loadDraftStaples() {
+  if (state.staples || state.staplesLoading) return;
+  state.staplesLoading = true;
+  try {
+    const res = await fetch(`/api/rd/staples?format=${encodeURIComponent(state.draft.format)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load staples');
+    state.staples = data.cards || [];
+  } catch (e) {
+    console.warn('staples load failed', e);
+    state.staples = [];
+  }
+  state.staplesLoading = false;
+  render();
+}
+
+let fmtSearchTimer = null;
+async function runFormatSearch(q) {
+  state.fmtSearch.loading = true;
+  render();
+  try {
+    const full = `format:${state.draft.format} -t:basic ${q}`;
+    const res = await fetch(
+      `https://api.scryfall.com/cards/search?q=${encodeURIComponent(full)}&unique=cards&order=edhrec`);
+    if (res.status === 404) {
+      state.fmtSearch.results = [];
+      state.fmtSearch.total = 0;
+    } else if (!res.ok) {
+      throw new Error('Scryfall error ' + res.status);
+    } else {
+      const data = await res.json();
+      state.fmtSearch.results = (data.data || []).map(extractScryfallCard);
+      state.fmtSearch.total = data.total_cards ?? state.fmtSearch.results.length;
+    }
+  } catch (e) {
+    state.fmtSearch.results = [];
+    state.fmtSearch.total = 0;
+    toast(e.message, true);
+  }
+  state.fmtSearch.loading = false;
+  render();
+}
+
+// Client-side color/type/hide-picked filtering over slim card objects
+// (works identically for staples and Scryfall search results).
+function filterFormatCards(cards) {
+  const f = state.filters;
+  const picked = pickedNamesSet();
+  return cards.filter((c) => {
+    if (f.hidePicked && picked.has(c.n.toLowerCase())) return false;
+    if (f.colors.size) {
+      const isLand = (c.t || '').includes('Land');
+      const cc = c.c || '';
+      let ok = false;
+      for (const col of f.colors) {
+        if (col === 'M' && cc.length > 1) ok = true;
+        else if (col === 'C' && !cc.length && !isLand) ok = true;
+        else if (cc.includes(col)) ok = true;
+      }
+      if (!ok) return false;
+    }
+    if (f.types.size && ![...f.types].some((ty) => (c.t || '').includes(ty))) return false;
+    return true;
+  });
+}
+
+function formatPoolHtml(v) {
+  const f = state.filters;
+  const fs = state.fmtSearch;
+  const label = cbFormatLabel(state.draft.format);
+  const searching = !!fs.q.trim();
+  if (!searching && !state.staples) loadDraftStaples(); // kicks off once, re-renders when done
+  const base = searching ? (fs.results || []) : (state.staples || []);
+  const filtered = filterFormatCards(base);
+  const shown = filtered.slice(0, 200);
+  fs.shown = shown; // for the click binding
+  const picked = pickedNamesSet();
+  const queueNames = new Set((state.myPriv?.queue || [])
+    .filter((i) => !i.tb).map((i) => (i.n || '').toLowerCase()));
+  const pickerOf = (name) => {
+    const p = v.picks.find((pk) => !pk.skip && pk.n.toLowerCase() === name.toLowerCase());
+    return p ? state.draft.players[p.p]?.name : null;
+  };
+  let countLine;
+  if (fs.loading) countLine = 'Searching Scryfall…';
+  else if (searching) {
+    countLine = `${fs.total ?? filtered.length} match(es) in ${label}` +
+      (filtered.length > 200 ? ' · showing the first 200 — refine your search' : '');
+  } else {
+    countLine = state.staplesLoading || !state.staples
+      ? 'Loading staples…'
+      : `Top ${state.staples.length} ${label} staples by EDHREC rank — search to reach every legal card`;
+  }
+  return `
+    <div class="pool-controls">
+      <div class="row2">
+        <input type="text" id="fmt-search" autocomplete="off" spellcheck="false"
+          placeholder="Search all of ${esc(label)} — Scryfall syntax works (t:goblin c:r cmc<3)…"
+          value="${esc(fs.q)}">
+      </div>
+      <div class="row2">
+        ${COLOR_FILTERS.map(([c, icon]) => `<button class="mini-chip ${f.colors.has(c) ? 'active' : ''}" data-color="${c}"
+          title="${({ W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green', M: 'Multicolor', C: 'Colorless' })[c]}">${icon}</button>`).join('')}
+        <label class="checkline"><input type="checkbox" id="hide-picked" ${f.hidePicked ? 'checked' : ''}> hide picked</label>
+      </div>
+      <div class="row2">
+        ${TYPE_FILTERS.map((t) => `<button class="mini-chip ${f.types.has(t) ? 'active' : ''}" data-type="${t}">${t}</button>`).join('')}
+      </div>
+    </div>
+    <div class="pool-count">${countLine}</div>
+    <div class="card-grid">
+      ${shown.map((c, i) => {
+        const lower = c.n.toLowerCase();
+        const isPicked = picked.has(lower);
+        return `<div class="cardc ${isPicked ? 'picked' : ''}" data-fmtcard="${i}">
+          ${c.img
+            ? `<img src="${esc(c.img.replace('/normal/', '/small/'))}" alt="${esc(c.n)}" loading="lazy">`
+            : `<div class="noimg">${esc(c.n)}</div>`}
+          ${queueNames.has(lower) && !isPicked ? '<span class="q-tag" title="in your queue">Q</span>' : ''}
+          ${isPicked ? `<span class="picked-tag">${esc(pickerOf(c.n) || '?')}</span>` : ''}
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function bindFormatPool() {
+  const input = $('#fmt-search');
+  input?.addEventListener('input', () => {
+    state.fmtSearch.q = input.value;
+    clearTimeout(fmtSearchTimer);
+    const q = input.value.trim();
+    if (!q) {
+      state.fmtSearch.results = null;
+      state.fmtSearch.total = null;
+      render();
+      return;
+    }
+    fmtSearchTimer = setTimeout(() => runFormatSearch(q), 350);
+  });
+  $('#hide-picked')?.addEventListener('change', (e) => { state.filters.hidePicked = e.target.checked; render(); });
+  bindPoolFilters();
+  $$('[data-fmtcard]').forEach((el) => el.addEventListener('click', () => {
+    const c = state.fmtSearch.shown?.[+el.dataset.fmtcard];
+    if (c) openFormatCardModal(c);
   }));
-  $$('[data-card]').forEach((el) => el.addEventListener('click', () => openCardModal(+el.dataset.card)));
+}
+
+// Card modal for cards that are not (yet) in the derived pool.
+function openFormatCardModal(c) {
+  const v = draftView(state.draft);
+  const lower = c.n.toLowerCase();
+  const pick = v.picks.find((p) => !p.skip && p.n.toLowerCase() === lower);
+  if (pick) { openCardModal(pick.c); return; } // picked → the regular modal
+  const me = myPid();
+  const myTurn = v.curPid === me && !v.done;
+  const inQueue = (state.myPriv?.queue || []).some((i) => (i.n || '').toLowerCase() === lower);
+  openModal(`
+    ${c.img ? `<img class="bigcard" src="${esc(c.img)}" alt="${esc(c.n)}">`
+      : `<h2>${esc(c.n)}</h2><p class="status-line">${esc(c.t || '')} ${manaHtml(c.m)}</p>`}
+    <div class="status-line">Available</div>
+    <div class="modal-actions">
+      ${me && !v.done && !isArchived() ? `
+        <button class="btn btn-primary" id="m-pick" ${myTurn ? '' : 'disabled'}>${myTurn ? 'Pick now' : 'Not your turn'}</button>
+        <button class="btn" id="m-queue" ${inQueue ? 'disabled' : ''}>${inQueue ? 'In queue' : 'Add to queue'}</button>` : ''}
+      <button class="btn" id="m-close">Close</button>
+    </div>`);
+  $('#m-pick')?.addEventListener('click', () => formatPickByName(c.n));
+  $('#m-queue')?.addEventListener('click', () => addToQueueByName(c.n));
+  $('#m-close')?.addEventListener('click', closeModal);
+}
+
+async function formatPickByName(name) {
+  if (!myPid() || !name) return;
+  try {
+    await ensureAuthed();
+    const res = await apiPost('/api/rd/pick', { draftId: state.draftId, cardName: name });
+    toast(`Picked ${res.name || name}`);
+    const inp = $('#pick-input'); if (inp) inp.value = '';
+    closeModal();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function addToQueueByName(name) {
+  const me = myPid();
+  if (!me) { toast('Join the draft first.', true); return; }
+  if (!name) return;
+  const queue = state.myPriv?.queue || [];
+  if (queue.some((i) => (i.n || '').toLowerCase() === name.toLowerCase())) {
+    toast('Already in your queue.');
+    return;
+  }
+  if (pickedNamesSet().has(name.toLowerCase())) { toast(`${name} was already picked.`, true); return; }
+  await updateDoc(doc(db, 'rd-drafts', state.draftId, 'private', me), {
+    queue: arrayUnion({ c: null, n: name }),
+  });
+  toast(`${name} added to queue`);
+  closeModal();
+}
+
+// Pickbar for format drafts: Scryfall autocomplete over every card name.
+function bindFormatPickbar(input, list, myTurn) {
+  let sel = -1, items = [], timer = null;
+  const hide = () => { list.style.display = 'none'; };
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const q = input.value.trim();
+      if (q.length < 2) { hide(); return; }
+      try {
+        const res = await fetch('https://api.scryfall.com/cards/autocomplete?q=' + encodeURIComponent(q));
+        const data = await res.json();
+        if (q !== input.value.trim()) return; // stale response
+        const picked = pickedNamesSet();
+        items = (data.data || []).filter((nm) => !picked.has(nm.toLowerCase())).slice(0, 10);
+      } catch { items = []; }
+      sel = -1;
+      if (!items.length) { hide(); return; }
+      list.innerHTML = items.map((nm, i) =>
+        `<div class="ac-item" data-i="${i}"><span>${esc(nm)}</span></div>`).join('');
+      list.style.display = 'block';
+      $$('.ac-item', list).forEach((el) => el.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        input.value = items[+el.dataset.i];
+        hide();
+      }));
+    }, 250);
+  });
+  input.addEventListener('blur', () => setTimeout(hide, 150));
+  input.addEventListener('keydown', (e) => {
+    if (list.style.display !== 'none' && items.length) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % items.length; }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + items.length) % items.length; }
+      else if (e.key === 'Enter' && sel >= 0) {
+        e.preventDefault(); input.value = items[sel]; hide(); return;
+      } else if (e.key === 'Escape') { hide(); return; }
+      $$('.ac-item', list).forEach((el, i) => el.classList.toggle('sel', i === sel));
+      return;
+    }
+    if (e.key === 'Enter' && myTurn) formatPickByName(input.value.trim());
+  });
+  $('#pick-btn')?.addEventListener('click', () => formatPickByName(input.value.trim()));
+  $('#queue-btn')?.addEventListener('click', async () => {
+    await addToQueueByName(input.value.trim());
+    input.value = '';
+  });
 }
 
 function openCardModal(cardId) {
   const c = state.pool[cardId];
+  if (!c) return; // format-draft queue rows may reference no pool entry yet
   const v = draftView(state.draft);
   const picked = v.pickedIds.has(cardId);
   const pick = picked ? v.picks.find((p) => p.c === cardId) : null;
@@ -2464,7 +2899,10 @@ function queueHtml(v) {
   if (!myPid()) return '<div class="empty">Join the draft to use a pick queue.</div>';
   const queue = state.myPriv?.queue || [];
   const myTurn = !v.done && !isArchived() && v.curPid === myPid();
-  const topPickable = myTurn && queue[0] && !queue[0].tb && !v.pickedIds.has(queue[0].c);
+  const topGone = queue[0] && (queue[0].tb || (isFormatDraft()
+    ? pickedNamesSet().has((queue[0].n || '').toLowerCase())
+    : v.pickedIds.has(queue[0].c)));
+  const topPickable = myTurn && queue[0] && !topGone;
   if (isArchived()) {
     return `<p class="hint">This draft is archived — the queue is read only.</p>
       ${queue.length ? `<div class="pick-rows">${queue.map((item) => `<div class="pick-row" data-card="${item.c}"><span>${esc(item.n)}</span></div>`).join('')}</div>` : '<div class="empty">Queue is empty.</div>'}`;
@@ -2505,7 +2943,9 @@ function bindQueue() {
   $('#q-push')?.addEventListener('click', enablePush);
   $('#q-pick-top')?.addEventListener('click', () => {
     const top = (state.myPriv?.queue || [])[0];
-    if (top) doPick(top.c);
+    if (!top) return;
+    if (isFormatDraft()) formatPickByName(top.n);
+    else doPick(top.c);
   });
   bindQueueDrag();
 }
@@ -2930,8 +3370,18 @@ function urlB64ToUint8Array(base64String) {
   return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
 }
 
+// The seat pid / private doc of the current context (draft or league)
+function curSeatPid() { return state.leagueId ? (state.cbCreds?.pid || null) : myPid(); }
+function curPrivRef() {
+  const pid = curSeatPid();
+  if (!pid) return null;
+  return state.leagueId
+    ? doc(db, 'cb-leagues', state.leagueId, 'private', pid)
+    : doc(db, 'rd-drafts', state.draftId, 'private', pid);
+}
+
 async function enablePush() {
-  if (!myPid()) { toast('Join the draft first.', true); return; }
+  if (!curSeatPid()) { toast(state.leagueId ? 'Join the league first.' : 'Join the draft first.', true); return; }
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
     toast(isIOS
@@ -2951,7 +3401,7 @@ async function enablePush() {
     const json = sub.toJSON();
     const subs = state.myPriv?.pushSubs || [];
     if (!subs.some((s) => s.endpoint === json.endpoint)) {
-      await updateDoc(doc(db, 'rd-drafts', state.draftId, 'private', myPid()), {
+      await updateDoc(curPrivRef(), {
         pushSubs: arrayUnion({ endpoint: json.endpoint, keys: json.keys }),
       });
     }
@@ -2968,9 +3418,9 @@ async function disablePush() {
     const sub = await reg?.pushManager.getSubscription();
     const endpoint = sub?.endpoint || state.pushEndpoint;
     if (sub) await sub.unsubscribe();
-    if (endpoint && myPid()) {
+    if (endpoint && curSeatPid()) {
       const subs = state.myPriv?.pushSubs || [];
-      await updateDoc(doc(db, 'rd-drafts', state.draftId, 'private', myPid()), {
+      await updateDoc(curPrivRef(), {
         pushSubs: subs.filter((s) => s.endpoint !== endpoint),
       });
     }
@@ -2983,6 +3433,1439 @@ async function disablePush() {
 
 function togglePush() {
   state.pushOn ? disablePush() : enablePush();
+}
+
+// ================================================================
+// CARD BLIND (4CB) LEAGUES
+// Blind N-card decks, revealed per round, round-robin matches
+// resolved by the players and self-reported. /4cb and /4cb?l=<id>
+// ================================================================
+
+const CB_FORMATS = [
+  ['legacy', 'Legacy'], ['vintage', 'Vintage'], ['modern', 'Modern'],
+  ['premodern', 'Premodern'], ['pioneer', 'Pioneer'],
+  ['standard', 'Standard'], ['pauper', 'Pauper'],
+];
+const cbFormatLabel = (f) => CB_FORMATS.find(([k]) => k === f)?.[1] || f;
+
+function cbSettings(l) {
+  const s = l.settings || {};
+  return {
+    handSize: s.handSize || 4,
+    highlander: s.highlander !== false,
+    format: s.format || 'modern',
+    rounds: s.rounds || 3,
+    maxPlayers: s.maxPlayers || 16,
+  };
+}
+
+// Points for a two-game result seen from one player's perspective.
+// WW 6 · WD 4 · WL 2 · DD 2 · DL 1 · LL 0 (mirrored in functions/index.js)
+function cbMatchPoints(res) {
+  const w = res.filter((g) => g === 'W').length;
+  const d = res.filter((g) => g === 'D').length;
+  if (w === 2) return 6;
+  if (w === 1) return d ? 4 : 2;
+  return d === 2 ? 2 : d === 1 ? 1 : 0;
+}
+const cbMirror = (res) => res.map((g) => (g === 'W' ? 'L' : g === 'L' ? 'W' : 'D'));
+
+function cbPid() { return state.cbCreds?.pid || null; }
+function isCbAdmin() {
+  const u = realUser();
+  return !!u && (state.league?.adminUid === u.uid || !!state.ownerOk);
+}
+function cbPlayerName(pid) { return state.league?.players?.[pid]?.name || '?'; }
+function cbLeagueUrl(id = state.leagueId) { return `${URL_4CB}?l=${id}`; }
+
+function fmtWhen(ms) {
+  return new Date(ms).toLocaleString(undefined, {
+    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+  });
+}
+function fmtLeft(ms) {
+  const d = ms - Date.now();
+  if (d <= 0) return 'now';
+  const h = Math.floor(d / 3600e3);
+  const m = Math.floor((d % 3600e3) / 60e3);
+  if (h >= 48) return `${Math.round(h / 24)} days`;
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
+function toLocalInputValue(ms) {
+  const d = new Date(ms);
+  const p = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// ---------- league boot / subscriptions ----------
+function parseCbParams() {
+  const p = new URLSearchParams(location.search);
+  const leagueId = p.get('l');
+  if (leagueId) {
+    if (p.get('p') && p.get('s')) saveCbCreds(leagueId, { pid: p.get('p'), secret: p.get('s') });
+    if (p.get('p')) history.replaceState(null, '', `${location.pathname}?l=${leagueId}`);
+  }
+  return leagueId;
+}
+
+function subscribeLeague() {
+  const ref = doc(db, 'cb-leagues', state.leagueId);
+  state.unsubLeague = onSnapshot(ref, (snap) => {
+    if (!snap.exists()) {
+      $('#app').innerHTML = `<div class="container"><div class="panel empty">
+        League not found. <br><br><a class="btn" href="${URL_4CB}">← Card Blind</a></div></div>`;
+      return;
+    }
+    const first = !state.league;
+    state.league = snap.data();
+    if (first) {
+      if (allCbCreds()[state.leagueId]) {
+        saveCbCreds(state.leagueId, { leagueName: state.league.name });
+      }
+      ensureCbSeatBinding().then((ok) => {
+        if (ok) { subscribeCbPriv(); syncCbChatSubs(); render(); }
+      });
+      tryCbUidRejoin();
+      recordCbMembership();
+      subscribeCbRounds();
+      // keep countdowns fresh
+      setInterval(() => { if (state.league) render(); }, 60e3);
+    }
+    render();
+  }, (e) => {
+    console.error(e);
+    toast('Connection error: ' + e.message, true);
+  });
+}
+
+function subscribeCbRounds() {
+  state.unsubRounds = onSnapshot(
+    collection(db, 'cb-leagues', state.leagueId, 'rounds'),
+    (snap) => {
+      state.cbRounds = {};
+      snap.forEach((d) => { state.cbRounds[d.data().n] = d.data(); });
+      syncCbChatSubs();
+      render();
+    },
+    (e) => console.warn('rounds listener failed', e)
+  );
+}
+
+function subscribeCbPriv() {
+  if (state.unsubPriv) { state.unsubPriv(); state.unsubPriv = null; }
+  if (!cbPid()) return;
+  state.unsubPriv = onSnapshot(
+    doc(db, 'cb-leagues', state.leagueId, 'private', cbPid()),
+    (snap) => {
+      state.myPriv = snap.exists() ? snap.data() : null;
+      state.pushOn = computePushOn();
+      render();
+    },
+    (e) => console.warn('league private listener denied (seat not bound yet?)', e.code)
+  );
+}
+
+// Listen to the match chats I'm allowed to see: my own matches, or
+// every match when I'm the admin. Denied listeners retry on the next
+// sync (e.g. once the seat binding lands).
+function syncCbChatSubs() {
+  const l = state.league;
+  if (!l || (!state.cbSeatBound && !isCbAdmin())) return;
+  const me = cbPid();
+  const admin = isCbAdmin();
+  for (const r of Object.values(state.cbRounds)) {
+    if (r.status === 'submission') continue;
+    for (const [mid, m] of Object.entries(r.matches || {})) {
+      if (!admin && m.a !== me && m.b !== me) continue;
+      const key = `${r.n}_${mid}`;
+      if (state.unsubCbChats[key]) continue;
+      state.unsubCbChats[key] = onSnapshot(
+        doc(db, 'cb-leagues', state.leagueId, 'matchchat', key),
+        (snap) => {
+          state.cbMatchChats[key] = snap.exists() ? snap.data() : null;
+          render();
+        },
+        (e) => {
+          console.warn('matchchat listener denied', e.code);
+          delete state.unsubCbChats[key];
+        }
+      );
+    }
+  }
+}
+
+async function ensureCbSeatBinding() {
+  const creds = allCbCreds()[state.leagueId];
+  if (!state.league || !creds?.pid) return false;
+  if (state.cbSeatBound) return true;
+  try {
+    await ensureAuthed();
+    const uid = auth.currentUser.uid;
+    if (state.league.uids?.[uid] === creds.pid) { state.cbSeatBound = true; return true; }
+    const res = await apiPost('/api/cb/claim', {
+      leagueId: state.leagueId, pid: creds.pid, secret: creds.secret || null,
+    });
+    if (res.secret && !creds.secret) saveCbCreds(state.leagueId, { secret: res.secret });
+    state.cbSeatBound = true;
+    return true;
+  } catch (e) {
+    console.warn('league seat binding failed', e);
+    return false;
+  }
+}
+
+async function tryCbUidRejoin() {
+  const l = state.league;
+  const user = realUser();
+  if (!l || !user || cbPid()) return;
+  const match = Object.entries(l.players || {}).find(([, p]) => p.uid === user.uid);
+  if (!match) return;
+  const [pid] = match;
+  try {
+    const res = await apiPost('/api/cb/claim', { leagueId: state.leagueId, pid });
+    saveCbCreds(state.leagueId, { pid, secret: res.secret || '' });
+    state.cbSeatBound = true;
+    subscribeCbPriv();
+    syncCbChatSubs();
+    recordCbMembership();
+    toast(`Welcome back, ${l.players[pid].name}!`);
+    render();
+  } catch (e) { console.warn('league rejoin failed', e); }
+}
+
+// Mirror my league membership into rd-users/{uid} for the dashboard.
+async function recordCbMembership(leagueId = state.leagueId, leagueName, role) {
+  if (!realUser() || !leagueId) return;
+  if (leagueId === state.leagueId) {
+    const amAdmin = state.league?.adminUid && state.league.adminUid === realUser()?.uid;
+    if (!cbPid() && !amAdmin) return;
+    leagueName = leagueName ?? state.league?.name ?? '';
+    role = role ?? (amAdmin ? 'admin' : 'player');
+  }
+  try {
+    await setDoc(doc(db, 'rd-users', realUser().uid), {
+      leagues: { [leagueId]: { name: leagueName || '', role: role || 'player', at: Date.now() } },
+    }, { merge: true });
+  } catch (e) { console.warn('recordCbMembership failed', e); }
+}
+
+// ---------- /4cb home: explainer + create + my leagues ----------
+function renderCbHome() {
+  $('#app').innerHTML = `
+    ${topbar('Card Blind', '4CB leagues')}
+    <div class="container">
+      <div class="panel">
+        <h1>Four Card Blind</h1>
+        <p class="hint">A Magic variant played in leagues. Every round, each player <b>blindly
+        submits a tiny deck</b> (classically 4 cards — your whole opening hand, no library).
+        When the deadline hits, all decks are revealed and <b>every deck plays every other
+        deck</b>: two games, one on the play and one on the draw, resolved by the players —
+        both sides play optimally, there is no hidden information and no luck. You report the
+        results here; a match is worth up to 6 points (WW&nbsp;6 · WD&nbsp;4 · WL/DD&nbsp;2 ·
+        DL&nbsp;1 · LL&nbsp;0). Highest total wins the round, the banlist evolves, and the next
+        round begins.</p>
+        <p class="hint" style="margin-top:10px"><a href="${URL_4CB_RULES}">Read the full format rules →</a></p>
+      </div>
+      <div class="panel" id="cb-mine-panel" style="display:none">
+        <h2 style="margin-top:0">Your leagues</h2>
+        <div id="cb-mine"><p class="hint">Loading…</p></div>
+      </div>
+      <div class="panel">
+        <h2 style="margin-top:0">Start a league</h2>
+        <div class="field"><label>League name</label>
+          <input type="text" id="cb-name" placeholder="e.g. Modern 4CB Autumn League"></div>
+        <div class="row">
+          <div class="field"><label>Cards per deck</label>
+            <input type="number" id="cb-hand" value="4" min="2" max="10"></div>
+          <div class="field"><label>Format</label>
+            <select id="cb-format">${CB_FORMATS.map(([k, lbl]) =>
+              `<option value="${k}" ${k === 'modern' ? 'selected' : ''}>${lbl}</option>`).join('')}</select></div>
+          <div class="field"><label>Rounds</label>
+            <input type="number" id="cb-rounds" value="3" min="1" max="50"></div>
+          <div class="field"><label>Max players</label>
+            <input type="number" id="cb-max" value="16" min="2" max="32"></div>
+        </div>
+        <div class="field">
+          <label class="checkline" style="text-transform:none;letter-spacing:0">
+            <input type="checkbox" id="cb-highlander" checked> Highlander — max 1 copy of each card (basic lands excepted)
+          </label>
+        </div>
+        <p class="hint">Cards must be legal in the chosen format. You can add your own bans on
+        top at any time — they apply from the next round.</p>
+        ${realUser()
+          ? '<button class="btn btn-primary btn-block" id="cb-create">Create league</button>'
+          : `<p class="hint">Creating a league requires an account, so you can manage it later from any device.</p>
+             <button class="btn btn-primary btn-block" id="cb-signin">Sign in with Google to create</button>`}
+      </div>
+      <p class="hint" style="text-align:center"><a href="${BASE}">About</a> · <a href="${URL_DASH}">Dashboard</a> · <a href="${URL_CONTACT}">Contact</a></p>
+    </div>`;
+  bindTopbar();
+  $('#cb-create')?.addEventListener('click', createLeague);
+  $('#cb-signin')?.addEventListener('click', async () => {
+    try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+    catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.message, true); }
+  });
+  loadCbHomeLeagues();
+}
+
+// Leagues known to this device or account.
+async function collectLeagueEntries() {
+  const entries = {};
+  for (const [id, c] of Object.entries(allCbCreds())) {
+    entries[id] = { name: c.leagueName || id, admin: false, pid: c.pid || null };
+  }
+  if (realUser()) {
+    try {
+      const snap = await getDoc(doc(db, 'rd-users', realUser().uid));
+      if (snap.exists()) {
+        for (const [id, info] of Object.entries(snap.data().leagues || {})) {
+          entries[id] = {
+            name: info.name || entries[id]?.name || id,
+            admin: entries[id]?.admin || info.role === 'admin',
+            pid: entries[id]?.pid || null,
+          };
+        }
+      }
+    } catch (e) { console.warn('rd-users leagues load failed', e); }
+  }
+  return entries;
+}
+
+async function loadCbHomeLeagues() {
+  const el = $('#cb-mine');
+  if (!el) return;
+  const rows = await loadLeagueRows();
+  if (!rows.length) return;
+  el.innerHTML = rows.map((r) => r.html).join('');
+  const panel = $('#cb-mine-panel');
+  if (panel) panel.style.display = 'block';
+}
+
+async function loadLeagueRows() {
+  const entries = await collectLeagueEntries();
+  const rows = await Promise.all(Object.entries(entries).map(async ([id, e]) => {
+    try {
+      const snap = await getDoc(doc(db, 'cb-leagues', id));
+      if (!snap.exists()) return null;
+      return await cbDashRow(id, snap.data(), e);
+    } catch { return null; }
+  }));
+  return rows.filter(Boolean).sort((a, b) => a.sortKey - b.sortKey || b.at - a.at);
+}
+
+// One dashboard/home row for a league, incl. the current round's phase.
+async function cbDashRow(id, l, { admin = false, pid = null } = {}) {
+  const s = cbSettings(l);
+  if (!pid && realUser()) {
+    pid = Object.entries(l.players || {}).find(([, p]) => p.uid === realUser().uid)?.[0] || null;
+  }
+  admin = admin || (!!realUser() && l.adminUid === realUser().uid);
+  let statusTxt = '';
+  let action = false; // this league wants something from me
+  let sortKey = 2;
+  if (l.archived) {
+    statusTxt = 'Archived — read only';
+    sortKey = 4;
+  } else if (l.status === 'done') {
+    statusTxt = `Complete after ${l.curRound} round${l.curRound === 1 ? '' : 's'}`;
+    sortKey = 3;
+  } else if (!l.curRound) {
+    statusTxt = admin
+      ? 'Waiting for you to start round 1'
+      : 'Waiting for the admin to start round 1';
+    action = admin;
+  } else {
+    let round = null;
+    try {
+      const rs = await getDoc(doc(db, 'cb-leagues', id, 'rounds', String(l.curRound)));
+      round = rs.exists() ? rs.data() : null;
+    } catch { /* status stays coarse */ }
+    const rn = `Round ${l.curRound}/${s.rounds}`;
+    if (!round) statusTxt = rn;
+    else if (round.status === 'submission') {
+      const mine = pid ? (round.submitted?.[pid] ? 'deck submitted ✓' : 'submit your deck!') : 'submissions open';
+      statusTxt = `${rn} — ${mine} Closes in ${fmtLeft(round.deadline)}.`;
+      action = !!pid && !round.submitted?.[pid];
+    } else if (round.status === 'playing') {
+      const myOpen = pid ? Object.values(round.matches || {})
+        .filter((m) => (m.a === pid || m.b === pid) && !m.result && !m.reports?.[pid]).length : 0;
+      statusTxt = `${rn} — decks revealed, matches in progress` +
+        (myOpen ? ` — report ${myOpen} result${myOpen === 1 ? '' : 's'}!` : '');
+      action = myOpen > 0;
+    } else {
+      statusTxt = `${rn} — round complete` + (admin ? ' — start the next round!' : '');
+      action = admin && l.curRound < s.rounds;
+    }
+    sortKey = action ? 0 : 1;
+  }
+  const names = Object.values(l.players || {}).map((p) => p.name);
+  const meta = [
+    `${s.handSize}-card blind · ${cbFormatLabel(s.format)}${s.highlander ? ' · highlander' : ''}`,
+    `${names.length}/${s.maxPlayers} players: ${names.map(esc).join(', ') || '—'}`,
+  ].join(' · ');
+  const myName = pid ? l.players?.[pid]?.name : null;
+  return {
+    id, sortKey, at: l.createdAt || 0,
+    html: `<div class="dash-row ${action ? 'myturn' : ''}">
+      <div class="dash-info">
+        <div class="dash-name">${esc(l.name || id)}
+          ${admin ? '<span class="admintag" title="you are the admin">admin</span>' : ''}
+          ${l.archived ? '<span class="droptag" title="read only">ARCHIVED</span>' : ''}
+          <span class="dash-as">${myName ? `as ${esc(myName)}` : 'not joined'}</span></div>
+        <div class="dash-status">${statusTxt}</div>
+        <div class="dash-meta">${meta}</div>
+      </div>
+      <a class="btn btn-sm ${action ? 'btn-primary' : ''}" href="${cbLeagueUrl(id)}">Open</a>
+    </div>`,
+  };
+}
+
+async function createLeague() {
+  if (!realUser()) { toast('Please sign in to create a league.', true); return; }
+  const name = $('#cb-name').value.trim();
+  if (!name) { toast('Give the league a name first.', true); return; }
+  const handSize = Math.max(2, Math.min(10, +$('#cb-hand').value || 4));
+  const rounds = Math.max(1, Math.min(50, +$('#cb-rounds').value || 3));
+  const maxPlayers = Math.max(2, Math.min(32, +$('#cb-max').value || 16));
+  const format = $('#cb-format').value;
+  const highlander = $('#cb-highlander').checked;
+  const btn = $('#cb-create');
+  btn.disabled = true;
+  try {
+    const leagueId = rid(12);
+    await setDoc(doc(db, 'cb-leagues', leagueId), {
+      name, createdAt: Date.now(),
+      adminUid: realUser().uid,
+      archived: false,
+      status: 'lobby',
+      curRound: 0,
+      customBans: [],
+      settings: { handSize, highlander, format, rounds, maxPlayers },
+      players: {}, uids: {},
+    });
+    saveCbCreds(leagueId, { leagueName: name });
+    await recordCbMembership(leagueId, name, 'admin');
+    location.href = cbLeagueUrl(leagueId);
+  } catch (e) {
+    toast(e.message, true);
+    btn.disabled = false;
+  }
+}
+
+// ---------- /4cb/rules: the full format rules ----------
+function renderCbRules() {
+  $('#app').innerHTML = `
+    ${topbar('Card Blind', 'Format rules')}
+    <div class="container">
+      <div class="panel">
+        <h1>How Card Blind works</h1>
+        <p class="hint">Four Card Blind (4CB) is a Magic: The Gathering thought-experiment
+        format from the early-2000s forum era, grown out of 3-Card Blind. Nobody shuffles up:
+        you build a tiny deck in secret, it gets revealed alongside everyone else's, and each
+        pairing is worked out assuming perfect play from both sides. The skill is entirely in
+        deckbuilding — reading the metagame, dodging the banlist, and finding four cards that
+        beat more tables than they lose to. Everything below describes the classic 4-card game;
+        your league's hand size, format and highlander rule are set by its creator.</p>
+      </div>
+
+      <div class="panel">
+        <h2 style="margin-top:0">1 · Building your deck</h2>
+        <p class="hint">
+        • Your deck is exactly <b>N cards</b> (4 in classic 4CB; this site allows 2–10 per league).<br>
+        • Every card must be <b>legal in the league's format</b> (Legacy, Vintage, Modern,
+          Premodern, Pioneer, Standard or Pauper — checked against Scryfall when you submit).<br>
+        • Cards on the <b>round's banlist</b> are not allowed. The banlist is shown on the
+          Round tab before you submit and is frozen per round — the admin updates it between
+          rounds.<br>
+        • With <b>highlander</b> on (the classic rule), at most 1 copy of each card, except
+          basic lands — you may run several Islands. Without highlander, duplicates are fine,
+          but Vintage-restricted cards are still capped at 1 copy.<br>
+        • There is <b>no sideboard and no mulligan</b> — what you submit is exactly what you
+          play, in every match of the round.</p>
+      </div>
+
+      <div class="panel">
+        <h2 style="margin-top:0">2 · The blind submission</h2>
+        <p class="hint">
+        • Each round has a <b>submission deadline</b>. Until then you can submit and resubmit
+          freely; only your latest deck counts.<br>
+        • Submissions are <b>completely hidden</b> — no other player, not even the league
+          admin, can see your deck before the reveal. That's the "blind": you are guessing at
+          the metagame, not reacting to it.<br>
+        • At the deadline the decks <b>reveal automatically</b> (the admin can reveal early
+          once everyone has submitted). If you miss the deadline you simply <b>sit the round
+          out</b> — no matches, 0 points, back in next round.</p>
+      </div>
+
+      <div class="panel">
+        <h2 style="margin-top:0">3 · Playing a game</h2>
+        <p class="hint">A "game" follows normal Magic rules with a few format-defining changes:</p>
+        <p class="hint">
+        • Your whole deck is your <b>opening hand</b>. Your library is <b>empty</b> — but you
+          do <b>not</b> lose for failing to draw from an empty library. Draw steps and "draw a
+          card" effects simply do nothing (an empty-library draw is not a loss here).<br>
+        • There is <b>no hidden information</b>: both decks are public, so hands, face-down
+          cards and any card in a hidden zone are treated as known to both players.<br>
+        • <b>No luck</b>: any random effect (coin flips, dice, random discard…) resolves in
+          the way <b>worst for the controller</b> of the effect. If your plan needs to win a
+          flip, your plan loses the flip.<br>
+        • Both players are assumed to play <b>perfectly</b> — every decision, in every line,
+          made with full knowledge of both decks. A game "happens" the way it would between
+          two flawless players.<br>
+        • If the game goes <b>infinite</b> or reaches a stalemate neither perfect player can
+          break (very common — e.g. two decks that can't interact), the game is a <b>draw</b>.
+          Double draws are a normal, expected result in this format.</p>
+        <p class="hint">In practice most matches are settled by talking the lines through with
+        your opponent — physically playing it out is allowed but rarely necessary. Perfect play
+        includes choosing whether and when to act first: the player on the play moves first and
+        that asymmetry is exactly why every match is two games.</p>
+      </div>
+
+      <div class="panel">
+        <h2 style="margin-top:0">4 · Matches & scoring</h2>
+        <p class="hint">After the reveal, <b>every deck plays every other deck</b> once
+        (round-robin). A match is <b>two games</b>: game 1 with one player on the play, game 2
+        with the other. Match points from your perspective:</p>
+        <div class="grid-wrap"><table class="cb-table">
+          <thead><tr><th>Your two games</th><th>Points</th></tr></thead>
+          <tbody>
+            <tr><td>Win + Win</td><td><b>6</b></td></tr>
+            <tr><td>Win + Draw</td><td><b>4</b></td></tr>
+            <tr><td>Win + Loss</td><td><b>2</b></td></tr>
+            <tr><td>Draw + Draw</td><td><b>2</b></td></tr>
+            <tr><td>Draw + Loss</td><td><b>1</b></td></tr>
+            <tr><td>Loss + Loss</td><td><b>0</b></td></tr>
+          </tbody>
+        </table></div>
+        <p class="hint">The player with the <b>highest total across all matches wins the
+        round</b>. League standings simply add up your round totals.</p>
+      </div>
+
+      <div class="panel">
+        <h2 style="margin-top:0">5 · Reporting results</h2>
+        <p class="hint">
+        • Both players of a match <b>report the two game results themselves</b> from the Round
+          tab. When the two reports agree, the result locks in and points are awarded.<br>
+        • If the reports <b>conflict</b>, the match is flagged, the league admin is notified,
+          and the admin sets the final result. You can amend your report any time before the
+          result is confirmed.<br>
+        • Every match has a private <b>notes thread</b> — visible only to the two players and
+          the admin — for agreeing on lines, scheduling, or leaving your reasoning for the
+          admin in case of a dispute.</p>
+      </div>
+
+      <div class="panel">
+        <h2 style="margin-top:0">6 · The league loop & the banlist</h2>
+        <p class="hint">
+        • A league runs a planned number of rounds (the admin can extend it). Each round:
+          banlist snapshot → blind submissions → reveal → matches → results → standings.<br>
+        • Between rounds the admin curates the <b>custom banlist</b>. The classic 4CB
+          tradition: <b>every card in the round winner's deck is banned</b> for the rest of
+          the league, and many groups also ban any card that appeared in half the decks. That
+          churn is the heart of the format — last round's answer is next round's dead card.
+          The tradition is a convention, not enforced software — your admin decides.<br>
+        • New players can join mid-league and simply start with the next submission window.
+          Dropped players stay in the standings but get no new matches.</p>
+      </div>
+
+      <div class="panel">
+        <h2 style="margin-top:0">7 · Judgment calls</h2>
+        <p class="hint">"Perfect play" occasionally leaves genuine rules puzzles — that's half
+        the fun. Talk it out in the match notes first; if you still disagree, report what you
+        each believe and let the admin rule. Useful tie-breaker questions: Does either deck
+        have a forced win on its own? Who is forced to act first, and does acting first lose?
+        Can the defender always hold up the answer? If neither player can ever profitably act,
+        it's a draw.</p>
+        <p class="hint" style="margin-top:10px">
+          <a href="${URL_4CB}">← Back to Card Blind</a> · <a href="${URL_DASH}">Dashboard</a></p>
+      </div>
+    </div>`;
+  bindTopbar();
+}
+
+// ---------- league page ----------
+function renderLeague() {
+  const l = state.league;
+  const s = cbSettings(l);
+  const me = cbPid();
+  const joined = !!me && !!l.players?.[me];
+  const n = l.curRound;
+  const round = n ? state.cbRounds[n] : null;
+  let sub = '';
+  if (l.archived) sub = 'Archived — read only';
+  else if (l.status === 'done') sub = 'League complete';
+  else if (!n) sub = `${cbFormatLabel(s.format)} · ${s.handSize}-card blind — waiting to start`;
+  else if (round?.status === 'submission') sub = `Round ${n}/${s.rounds} — submissions until ${fmtWhen(round.deadline)}`;
+  else if (round?.status === 'playing') sub = `Round ${n}/${s.rounds} — matches in progress`;
+  else sub = `Round ${n}/${s.rounds}`;
+
+  const tabs = [['round', 'Round'], ['standings', 'Standings'], ['history', 'History'], ['players', 'Players']];
+  if (isCbAdmin()) tabs.push(['admin', 'Admin']);
+  if (!tabs.some(([id]) => id === state.tab)) state.tab = 'round';
+
+  $('#app').innerHTML = `
+    ${topbar(l.name || 'Card Blind', sub, joined)}
+    <div class="container">
+      ${cbBannerHtml()}
+      <div class="tabs">${tabs.map(([id, lbl]) =>
+        `<button class="tab-btn ${state.tab === id ? 'active' : ''}" data-tab="${id}">${lbl}</button>`).join('')}
+      </div>
+      <div id="tab-content">${cbTabContentHtml()}</div>
+    </div>`;
+  bindTopbar();
+  $$('.tab-btn').forEach((b) => b.addEventListener('click', () => {
+    state.tab = b.dataset.tab;
+    if (location.hash !== '#' + state.tab) location.hash = state.tab;
+    render();
+  }));
+  cbBindTabContent();
+}
+
+function cbBannerHtml() {
+  const l = state.league;
+  const s = cbSettings(l);
+  const me = cbPid();
+  const n = l.curRound;
+  const round = n ? state.cbRounds[n] : null;
+  let cls = '', txt = '', small = '';
+  if (l.status === 'done') {
+    const totals = cbLeagueTotals();
+    const best = Object.entries(totals).sort((a, b) => b[1] - a[1])[0];
+    txt = best ? `League complete — ${esc(cbPlayerName(best[0]))} wins with ${best[1]} points!` : 'League complete';
+  } else if (round?.status === 'submission') {
+    const mine = me && l.players?.[me] && !l.players[me].dropped && !round.submitted?.[me];
+    cls = mine ? 'mine' : '';
+    txt = mine
+      ? `Submit your ${s.handSize}-card deck — ${fmtLeft(round.deadline)} left`
+      : `Round ${n}: submissions close ${fmtWhen(round.deadline)}`;
+    small = mine ? '' : 'Decks stay hidden until the deadline.';
+  } else if (round?.status === 'playing') {
+    const myOpen = me ? Object.values(round.matches || {})
+      .filter((m) => (m.a === me || m.b === me) && !m.result && !m.reports?.[me]).length : 0;
+    cls = myOpen ? 'mine' : '';
+    txt = myOpen
+      ? `Play your matches — ${myOpen} result${myOpen === 1 ? '' : 's'} to report`
+      : `Round ${n}: matches in progress`;
+  } else if (!n) {
+    txt = isCbAdmin() ? 'Start round 1 from the Admin tab' : 'Waiting for the admin to start round 1';
+  } else {
+    txt = `Round ${n} is complete`;
+    const totals = round ? cbRoundPoints(round) : {};
+    const best = Object.entries(totals).sort((a, b) => b[1] - a[1])[0];
+    if (best) small = `${esc(cbPlayerName(best[0]))} won the round with ${best[1]} points.`;
+  }
+  return `<div class="turn-banner ${cls}"><div class="big">${txt}</div>${small ? `<div class="sub">${small}</div>` : ''}</div>`;
+}
+
+function cbTabContentHtml() {
+  switch (state.tab) {
+    case 'round': return cbRoundTabHtml();
+    case 'standings': return cbStandingsHtml();
+    case 'history': return cbHistoryHtml();
+    case 'players': return cbPlayersHtml();
+    case 'admin': return isCbAdmin() ? cbAdminHtml() : '';
+    default: return '';
+  }
+}
+function cbBindTabContent() {
+  switch (state.tab) {
+    case 'round': return cbBindRoundTab();
+    case 'history': return cbBindHistory();
+    case 'players': return cbBindPlayers();
+    case 'admin': return cbBindAdmin();
+    default: return undefined;
+  }
+}
+
+// ---------- shared card rendering ----------
+function cbDeckHtml(cards) {
+  return `<div class="cb-deck">${(cards || []).map((c) => c.img
+    ? `<img class="cb-card" loading="lazy" src="${esc(c.img.replace('/normal/', '/small/'))}"
+         alt="${esc(c.n)}" title="${esc(c.n)}" data-cbimg="${esc(c.img)}">`
+    : `<div class="cb-card cb-noimg" title="${esc(c.n)}">${esc(c.n)}</div>`).join('')}</div>`;
+}
+
+function bindCbCardHovers() {
+  const tip = ensureCardTip();
+  const canHover = matchMedia('(hover: hover)').matches;
+  const hideTip = () => { tip.style.display = 'none'; tip.innerHTML = ''; };
+  $$('[data-cbimg]').forEach((el) => {
+    if (el._cbBound) return;
+    el._cbBound = true;
+    el.addEventListener('click', () => {
+      hideTip();
+      openModal(`<img class="bigcard" src="${esc(el.dataset.cbimg)}" alt="">`);
+    });
+    if (canHover) {
+      el.addEventListener('mouseenter', () => {
+        tip.innerHTML = `<img src="${esc(el.dataset.cbimg)}" alt="">`;
+        tip.style.display = 'block';
+      });
+      el.addEventListener('mousemove', (e) => {
+        const w = 240, h = 335;
+        let x = e.clientX + 16, y = e.clientY - h / 2;
+        if (x + w > innerWidth - 8) x = e.clientX - w - 16;
+        y = Math.max(8, Math.min(y, innerHeight - h - 8));
+        tip.style.left = x + 'px';
+        tip.style.top = y + 'px';
+      });
+      el.addEventListener('mouseleave', hideTip);
+    }
+  });
+}
+
+// ---------- Round tab ----------
+function cbRoundTabHtml() {
+  const l = state.league;
+  const n = l.curRound;
+  if (!n) {
+    return `<div class="panel empty">No round has started yet.<br><br>
+      ${isCbAdmin() ? 'Start round 1 from the Admin tab once everyone has joined.'
+        : 'Join from the Players tab — the admin starts round 1 when the table is ready.'}<br><br>
+      <a href="${URL_4CB_RULES}">Read the format rules</a></div>`;
+  }
+  const round = state.cbRounds[n];
+  if (!round) return '<div class="panel"><p class="hint">Loading round…</p></div>';
+  return round.status === 'submission' ? cbSubmissionHtml(round) : cbPlayHtml(round);
+}
+
+function cbSubmissionHtml(round) {
+  const l = state.league;
+  const s = cbSettings(l);
+  const me = cbPid();
+  const canPlay = !!me && !!l.players?.[me] && !l.players[me].dropped;
+  const mySub = state.myPriv?.sub?.round === round.n ? state.myPriv.sub : null;
+  if (!state.cbSubDraft || state.cbSubDraft.round !== round.n || state.cbSubDraft.fromAt !== (mySub?.at || 0)) {
+    state.cbSubDraft = {
+      round: round.n,
+      fromAt: mySub?.at || 0,
+      cards: (mySub?.cards || []).map((c) => c.n),
+    };
+    while (state.cbSubDraft.cards.length < s.handSize) state.cbSubDraft.cards.push('');
+  }
+  const activePids = Object.entries(l.players || {}).filter(([, p]) => !p.dropped);
+  const bans = round.bans || [];
+  return `
+    <div class="panel">
+      <h2 style="margin-top:0">Round ${round.n} — deck submission</h2>
+      <div class="specs">
+        <div><span class="spec-l">Deadline</span><span class="spec-v">${fmtWhen(round.deadline)} (${fmtLeft(round.deadline)} left)</span></div>
+        <div><span class="spec-l">Format</span><span class="spec-v">${cbFormatLabel(s.format)}${s.highlander ? ' · highlander' : ''}</span></div>
+        <div><span class="spec-l">Deck size</span><span class="spec-v">${s.handSize} cards</span></div>
+      </div>
+      ${bans.length ? `<div class="field" style="margin-top:12px"><label>Banned this round</label>
+        <div class="chips">${bans.map((b) => `<span class="chip">${esc(b)}</span>`).join('')}</div></div>`
+      : '<p class="hint">No extra bans this round — format legality applies.</p>'}
+    </div>
+    ${canPlay ? `
+    <div class="panel">
+      <h2 style="margin-top:0">${mySub ? 'Your submitted deck' : 'Your deck'}</h2>
+      ${mySub ? `${cbDeckHtml(mySub.cards)}
+        <p class="hint">Submitted ${fmtWhen(mySub.at)}. You can change and resubmit until the deadline.
+        Nobody — not even the league admin — can see it before the reveal.</p>` : ''}
+      ${state.cbSubDraft.cards.map((v, i) => `
+        <div class="field"><label>Card ${i + 1}</label>
+          <div class="ac-wrap">
+            <input type="text" id="cb-card-${i}" data-cbidx="${i}" value="${esc(v)}"
+              placeholder="Card name…" autocomplete="off" spellcheck="false">
+            <div class="ac-list" id="cb-ac-${i}" style="display:none"></div>
+          </div></div>`).join('')}
+      <button class="btn btn-primary" id="cb-submit">${mySub ? 'Resubmit deck' : 'Submit deck'}</button>
+      <p class="hint">Legality, bans and duplicates are checked when you submit.
+        New to the format? <a href="${URL_4CB_RULES}">Read the full rules</a>.</p>
+    </div>` : `
+    <div class="panel">
+      <p class="hint">${me ? 'You are sitting this league out.'
+        : `Join from the <a href="#players">Players tab</a> to submit a deck for this round.`}</p>
+    </div>`}
+    <div class="panel">
+      <h2 style="margin-top:0">Submissions</h2>
+      <div class="chips">${activePids.map(([pid, p]) =>
+        `<span class="chip ${round.submitted?.[pid] ? 'active' : ''}">${esc(p.name)}${round.submitted?.[pid] ? ' ✓' : ''}</span>`).join('')
+        || '<span class="hint">No players yet.</span>'}</div>
+      <p class="hint">Decks are revealed automatically at the deadline${isCbAdmin() ? ', or earlier from the Admin tab once everyone has submitted' : ''}.</p>
+    </div>`;
+}
+
+function cbPlayHtml(round) {
+  const l = state.league;
+  const me = cbPid();
+  const matches = Object.entries(round.matches || {});
+  const myMatches = me ? matches.filter(([, m]) => m.a === me || m.b === me) : [];
+  const otherMatches = matches.filter(([mid]) => !myMatches.some(([m2]) => m2 === mid));
+  const decks = round.decks || {};
+  const sitOut = me && l.players?.[me] && !l.players[me].dropped && !decks[me] && round.status !== 'done';
+  return `
+    ${round.status === 'done' ? `<div class="panel">
+      <h2 style="margin-top:0">Round ${round.n} — complete</h2>
+      ${cbRoundTableHtml(round)}
+    </div>` : ''}
+    ${sitOut ? '<div class="panel"><p class="hint">You did not submit a deck for this round and sit it out.</p></div>' : ''}
+    ${myMatches.length ? `<div class="panel">
+      <h2 style="margin-top:0">Your matches</h2>
+      ${myMatches.map(([mid, m]) => cbMatchRowHtml(round, mid, m, true)).join('')}
+    </div>` : ''}
+    <div class="panel">
+      <h2 style="margin-top:0">Decks</h2>
+      ${Object.keys(decks).length ? Object.entries(decks).map(([pid, cards]) => `
+        <div class="cb-deckrow">
+          <div class="cb-deckname">${esc(cbPlayerName(pid))}${pid === me ? ' <span class="dash-as">(you)</span>' : ''}</div>
+          ${cbDeckHtml(cards)}
+        </div>`).join('') : '<p class="hint">No decks were submitted this round.</p>'}
+    </div>
+    ${otherMatches.length ? `<div class="panel">
+      <h2 style="margin-top:0">${myMatches.length ? 'Other matches' : 'Matches'}</h2>
+      ${otherMatches.map(([mid, m]) => cbMatchRowHtml(round, mid, m, false)).join('')}
+    </div>` : ''}`;
+}
+
+function cbGameLabel(m, gi) {
+  const me = cbPid();
+  const meIsA = m.a === me;
+  const onPlay = gi === 0 ? meIsA : !meIsA;
+  return `Game ${gi + 1} — you're on the ${onPlay ? 'play' : 'draw'}`;
+}
+
+function cbMatchRowHtml(round, mid, m, mine) {
+  const me = cbPid();
+  const admin = isCbAdmin();
+  const chatKey = `${round.n}_${mid}`;
+  const chat = state.cbMatchChats[chatKey];
+  // show the Notes button as soon as we're entitled to the chat — the
+  // listener may still be attaching right after a reveal
+  const canChat = mine || admin;
+  const chatCount = chat?.msgs?.length || 0;
+  const open = state.cbChatOpen === chatKey;
+  let body = '';
+  if (m.result) {
+    const aw = m.result.filter((g) => g === 'W').length;
+    const bw = m.result.filter((g) => g === 'L').length;
+    const games = m.result.map((g, i) =>
+      `G${i + 1}: ${g === 'D' ? 'draw' : g === 'W' ? esc(cbPlayerName(m.a)) : esc(cbPlayerName(m.b))}`).join(' · ');
+    body = `<div class="cb-result">
+      <b>${esc(cbPlayerName(m.a))} ${aw}–${bw} ${esc(cbPlayerName(m.b))}</b>
+      <span class="dash-as">${games}</span>
+      <span class="cb-pts">+${m.pts?.[m.a] ?? 0} / +${m.pts?.[m.b] ?? 0} pts</span>
+      ${m.resolvedBy === 'admin' ? '<span class="admintag">set by admin</span>' : ''}
+    </div>`;
+  } else if (mine && round.status === 'playing') {
+    body = cbReportWidgetHtml(mid, m);
+  } else {
+    const reported = Object.keys(m.reports || {}).length;
+    body = `<p class="hint" style="margin:6px 0 0">${m.disputed
+      ? '⚠ Conflicting reports — the admin will set the result.'
+      : `Waiting for results (${reported}/2 reported).`}</p>`;
+  }
+  return `<div class="cb-match ${m.disputed && !m.result ? 'disputed' : ''}">
+    <div class="cb-match-head">
+      <span class="cb-vs">${esc(cbPlayerName(m.a))} vs ${esc(cbPlayerName(m.b))}</span>
+      ${canChat ? `<button class="btn btn-sm" data-cbchat="${esc(chatKey)}">${open ? 'Hide notes' : `Notes${chatCount ? ` (${chatCount})` : ''}`}</button>` : ''}
+    </div>
+    ${body}
+    ${open && canChat ? cbChatAreaHtml(chatKey) : ''}
+  </div>`;
+}
+
+function cbReportWidgetHtml(mid, m) {
+  const me = cbPid();
+  const myRep = m.reports?.[me] || null; // stored canonically (a's view)
+  const myView = myRep ? (m.a === me ? myRep : cbMirror(myRep)) : null;
+  const sel = state.cbReportSel[mid] || myView || [null, null];
+  const opp = cbPlayerName(m.a === me ? m.b : m.a);
+  const oppReported = !!m.reports?.[m.a === me ? m.b : m.a];
+  const OPTS = [['W', 'Won'], ['D', 'Draw'], ['L', 'Lost']];
+  return `<div class="cb-report">
+    ${m.disputed ? `<p class="hint" style="color:var(--red)">⚠ Your report conflicts with ${esc(opp)}'s.
+      The admin was notified — you can also amend your report below.</p>` : ''}
+    ${[0, 1].map((gi) => `<div class="cb-game">
+      <span class="cb-gamelbl">${cbGameLabel(m, gi)}</span>
+      <span class="viewtoggle">${OPTS.map(([v, lbl]) =>
+        `<button class="mini-chip ${sel[gi] === v ? 'active' : ''}" data-cbg="${esc(mid)}|${gi}|${v}">${lbl}</button>`).join('')}</span>
+    </div>`).join('')}
+    <div class="adm-inline">
+      <button class="btn btn-sm btn-primary" data-cbreport="${esc(mid)}">${myRep ? 'Update report' : 'Report result'}</button>
+      ${myRep ? `<span class="hint">You reported — ${oppReported ? 'reports conflict.' : `waiting for ${esc(opp)} to confirm.`}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+function cbChatAreaHtml(chatKey) {
+  const msgs = state.cbMatchChats[chatKey]?.msgs || [];
+  return `<div class="cb-chat">
+    <div class="cb-chat-msgs" id="cbchat-msgs">${msgs.length ? msgs.map((m) => `
+      <div class="cb-msg"><b>${esc(m.name)}</b> <span class="dash-as">${fmtWhen(m.at)}</span>
+        <div>${esc(m.text)}</div></div>`).join('')
+      : '<p class="hint">No notes yet. Only the two players and the league admin can read this.</p>'}
+    </div>
+    <div class="cb-chat-send">
+      <input type="text" id="cb-chat-input" maxlength="500" placeholder="Note for this match…"
+        value="${esc(state.cbChatDraft)}" autocomplete="off">
+      <button class="btn btn-sm" id="cb-chat-sendbtn">Send</button>
+    </div>
+  </div>`;
+}
+
+function cbBindRoundTab() {
+  bindCbCardHovers();
+  // submission inputs + autocomplete
+  $$('[data-cbidx]').forEach((input) => {
+    const list = $(`#cb-ac-${input.dataset.cbidx}`);
+    if (list) attachCbAutocomplete(input, list);
+  });
+  $('#cb-submit')?.addEventListener('click', submitCbDeck);
+  // report widget
+  $$('[data-cbg]').forEach((b) => b.addEventListener('click', () => {
+    const [mid, gi, v] = b.dataset.cbg.split('|');
+    const round = state.cbRounds[state.league.curRound];
+    const m = round?.matches?.[mid];
+    if (!m) return;
+    const me = cbPid();
+    const myRep = m.reports?.[me] || null;
+    const myView = myRep ? (m.a === me ? myRep : cbMirror(myRep)) : null;
+    const cur = state.cbReportSel[mid] || myView || [null, null];
+    const next = [...cur];
+    next[+gi] = v;
+    state.cbReportSel[mid] = next;
+    render();
+  }));
+  $$('[data-cbreport]').forEach((b) => b.addEventListener('click', () => sendCbReport(b.dataset.cbreport)));
+  cbBindMatchNotes();
+}
+
+// Notes toggle + input wiring, shared by the Round and History tabs.
+function cbBindMatchNotes() {
+  $$('[data-cbchat]').forEach((b) => b.addEventListener('click', () => {
+    state.cbChatOpen = state.cbChatOpen === b.dataset.cbchat ? null : b.dataset.cbchat;
+    state.cbChatDraft = '';
+    render();
+  }));
+  const chatInput = $('#cb-chat-input');
+  chatInput?.addEventListener('input', () => { state.cbChatDraft = chatInput.value; });
+  chatInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCbMatchMsg(); });
+  $('#cb-chat-sendbtn')?.addEventListener('click', sendCbMatchMsg);
+}
+
+function cbBindHistory() {
+  bindCbCardHovers();
+  cbBindMatchNotes();
+}
+
+function attachCbAutocomplete(input, list) {
+  let sel = -1, items = [], timer = null;
+  const hide = () => { list.style.display = 'none'; };
+  input.addEventListener('input', () => {
+    state.cbSubDraft.cards[+input.dataset.cbidx] = input.value;
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const q = input.value.trim();
+      if (q.length < 2) { hide(); return; }
+      try {
+        const res = await fetch('https://api.scryfall.com/cards/autocomplete?q=' + encodeURIComponent(q));
+        const data = await res.json();
+        if (q !== input.value.trim()) return; // stale response
+        items = (data.data || []).slice(0, 8);
+      } catch { items = []; }
+      sel = -1;
+      if (!items.length) { hide(); return; }
+      list.innerHTML = items.map((nm, i) =>
+        `<div class="ac-item" data-i="${i}"><span>${esc(nm)}</span></div>`).join('');
+      list.style.display = 'block';
+      $$('.ac-item', list).forEach((el) => el.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        input.value = items[+el.dataset.i];
+        state.cbSubDraft.cards[+input.dataset.cbidx] = input.value;
+        hide();
+      }));
+    }, 250);
+  });
+  input.addEventListener('blur', () => setTimeout(hide, 150));
+  input.addEventListener('keydown', (e) => {
+    if (list.style.display === 'none' || !items.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % items.length; }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + items.length) % items.length; }
+    else if (e.key === 'Enter' && sel >= 0) {
+      e.preventDefault();
+      input.value = items[sel];
+      state.cbSubDraft.cards[+input.dataset.cbidx] = input.value;
+      hide();
+      return;
+    } else if (e.key === 'Escape') { hide(); return; }
+    $$('.ac-item', list).forEach((el, i) => el.classList.toggle('sel', i === sel));
+  });
+}
+
+async function submitCbDeck() {
+  const s = cbSettings(state.league);
+  const cards = state.cbSubDraft.cards.map((c) => c.trim());
+  if (cards.some((c) => !c)) { toast(`Enter all ${s.handSize} card names first.`, true); return; }
+  const btn = $('#cb-submit');
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking cards…'; }
+  try {
+    await ensureAuthed();
+    await apiPost('/api/cb/submit', { leagueId: state.leagueId, cards });
+    toast('Deck submitted!');
+  } catch (e) {
+    toast(e.message, true);
+  }
+  const btn2 = $('#cb-submit');
+  if (btn2) { btn2.disabled = false; btn2.textContent = 'Submit deck'; }
+}
+
+async function sendCbReport(mid) {
+  const round = state.cbRounds[state.league.curRound];
+  const m = round?.matches?.[mid];
+  const me = cbPid();
+  if (!m || !me) return;
+  const myRep = m.reports?.[me] || null;
+  const myView = myRep ? (m.a === me ? myRep : cbMirror(myRep)) : null;
+  const sel = state.cbReportSel[mid] || myView;
+  if (!sel || sel.some((g) => !g)) { toast('Pick a result for both games first.', true); return; }
+  try {
+    await ensureAuthed();
+    await apiPost('/api/cb/report', {
+      leagueId: state.leagueId, round: round.n, matchId: mid, games: sel,
+    });
+    delete state.cbReportSel[mid];
+    toast('Result reported.');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function sendCbMatchMsg() {
+  const key = state.cbChatOpen;
+  const input = $('#cb-chat-input');
+  const text = input?.value.trim();
+  if (!key || !text) return;
+  const sep = key.indexOf('_');
+  const round = +key.slice(0, sep);
+  const matchId = key.slice(sep + 1);
+  input.value = '';
+  state.cbChatDraft = '';
+  try {
+    await ensureAuthed();
+    await apiPost('/api/cb/chat', { leagueId: state.leagueId, round, matchId, text });
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------- Standings ----------
+function cbRoundPoints(r) {
+  const pts = {};
+  for (const m of Object.values(r.matches || {})) {
+    for (const [pid, p] of Object.entries(m.pts || {})) pts[pid] = (pts[pid] || 0) + p;
+  }
+  return pts;
+}
+function cbLeagueTotals() {
+  const totals = {};
+  for (const r of Object.values(state.cbRounds)) {
+    for (const [pid, v] of Object.entries(cbRoundPoints(r))) totals[pid] = (totals[pid] || 0) + v;
+  }
+  return totals;
+}
+
+function cbRoundTableHtml(round) {
+  const pts = cbRoundPoints(round);
+  const rows = Object.keys(round.decks || {})
+    .map((pid) => [pid, pts[pid] || 0])
+    .sort((a, b) => b[1] - a[1]);
+  if (!rows.length) return '<p class="hint">No matches were played.</p>';
+  const open = Object.values(round.matches || {}).filter((m) => !m.result).length;
+  return `<div class="grid-wrap"><table class="cb-table">
+    <thead><tr><th>#</th><th>Player</th><th>Points</th></tr></thead>
+    <tbody>${rows.map(([pid, p], i) => `<tr class="${pid === cbPid() ? 'me' : ''}">
+      <td>${i + 1}</td><td>${esc(cbPlayerName(pid))}</td><td>${p}</td></tr>`).join('')}</tbody>
+  </table></div>${open ? `<p class="hint">${open} match${open === 1 ? '' : 'es'} still unreported.</p>` : ''}`;
+}
+
+function cbStandingsHtml() {
+  const l = state.league;
+  const played = Object.values(state.cbRounds)
+    .filter((r) => r.status !== 'submission')
+    .sort((a, b) => a.n - b.n);
+  if (!played.length) return '<div class="panel empty">Standings appear once the first decks are revealed.</div>';
+  const totals = cbLeagueTotals();
+  const pids = new Set(Object.keys(l.players || {}));
+  played.forEach((r) => Object.keys(r.decks || {}).forEach((p) => pids.add(p)));
+  const rows = [...pids]
+    .map((pid) => [pid, totals[pid] || 0])
+    .sort((a, b) => b[1] - a[1]);
+  return `<div class="panel">
+    <h2 style="margin-top:0">League standings</h2>
+    <div class="grid-wrap"><table class="cb-table">
+      <thead><tr><th>#</th><th>Player</th>${played.map((r) =>
+        `<th title="Round ${r.n}">R${r.n}</th>`).join('')}<th>Total</th></tr></thead>
+      <tbody>${rows.map(([pid, total], i) => `<tr class="${pid === cbPid() ? 'me' : ''}">
+        <td>${i + 1}</td>
+        <td>${esc(cbPlayerName(pid))}${l.players?.[pid]?.dropped ? ' <span class="droptag">DROPPED</span>' : ''}</td>
+        ${played.map((r) => `<td>${(r.decks || {})[pid] ? (cbRoundPoints(r)[pid] || 0) : '—'}</td>`).join('')}
+        <td><b>${total}</b></td></tr>`).join('')}</tbody>
+    </table></div>
+    ${played.some((r) => r.status === 'playing') ? '<p class="hint">Includes the running round — points update as results are confirmed.</p>' : ''}
+  </div>`;
+}
+
+// ---------- History ----------
+function cbHistoryHtml() {
+  const rounds = Object.values(state.cbRounds)
+    .filter((r) => r.status === 'done')
+    .sort((a, b) => b.n - a.n);
+  if (!rounds.length) return '<div class="panel empty">Finished rounds appear here with their banlist, decks and results.</div>';
+  return rounds.map((r) => {
+    const pts = cbRoundPoints(r);
+    const best = Object.entries(pts).sort((a, b) => b[1] - a[1])[0];
+    return `<div class="panel">
+      <h2 style="margin-top:0">Round ${r.n}</h2>
+      <p class="hint">${r.finishedAt ? `Finished ${fmtWhen(r.finishedAt)}.` : ''}
+        ${best ? ` Winner: <b>${esc(cbPlayerName(best[0]))}</b> (${best[1]} points).` : ' No matches were played.'}</p>
+      ${(r.bans || []).length ? `<div class="field"><label>Banned that round</label>
+        <div class="chips">${r.bans.map((b) => `<span class="chip">${esc(b)}</span>`).join('')}</div></div>` : ''}
+      ${Object.entries(r.decks || {}).map(([pid, cards]) => `
+        <div class="cb-deckrow">
+          <div class="cb-deckname">${esc(cbPlayerName(pid))}<span class="dash-as">${pts[pid] || 0} pts</span></div>
+          ${cbDeckHtml(cards)}
+        </div>`).join('')}
+      ${Object.keys(r.matches || {}).length ? `<div class="field"><label>Results</label>
+        ${Object.entries(r.matches).map(([mid, m]) =>
+          cbMatchRowHtml(r, mid, m, m.a === cbPid() || m.b === cbPid())).join('')}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// ---------- Players tab ----------
+function cbPlayersHtml() {
+  const l = state.league;
+  const s = cbSettings(l);
+  const me = cbPid();
+  const joined = !!me && !!l.players?.[me];
+  const seats = Object.entries(l.players || {});
+  const canJoin = !joined && !l.archived && l.status !== 'done' && seats.length < s.maxPlayers;
+  const inviteLink = cbLeagueUrl();
+  const privLink = joined && state.cbCreds?.secret
+    ? `${inviteLink}&p=${me}&s=${state.cbCreds.secret}` : '';
+  return `
+    <div class="panel">
+      <h2 style="margin-top:0">Players (${seats.length}/${s.maxPlayers})</h2>
+      ${seats.length ? seats.map(([pid, p]) => `<div class="seat ${pid === me ? 'me' : ''}">
+        <span>${esc(p.name)}
+          ${p.uid && p.uid === l.adminUid ? '<span class="admintag">admin</span>' : ''}
+          ${p.dropped ? '<span class="droptag">DROPPED</span>' : ''}</span>
+        <span class="hint">joined ${new Date(p.joinedAt || 0).toLocaleDateString()}</span>
+      </div>`).join('') : '<p class="hint">Nobody has joined yet.</p>'}
+    </div>
+    ${canJoin ? `<div class="panel">
+      <h2 style="margin-top:0">Join this league</h2>
+      <div class="row">
+        <div class="field" style="flex:1"><label>Your name</label>
+          <input type="text" id="cbj-name" maxlength="30" placeholder="Player name"></div>
+        <button class="btn btn-primary" id="cbj-go" style="align-self:flex-end">Join</button>
+      </div>
+      <p class="hint">No account needed — you get a private rejoin link. Sign in with Google to
+      play from any device.</p>
+    </div>` : ''}
+    <div class="panel">
+      <h2 style="margin-top:0">Links</h2>
+      <div class="link-row"><span class="lbl">Invite</span><span class="url">${esc(inviteLink)}</span>
+        <button class="btn btn-sm" data-copy="${esc(inviteLink)}" data-lbl="Invite link">Copy</button></div>
+      ${privLink ? `<div class="link-row"><span class="lbl">Your rejoin link</span><span class="url">••••••</span>
+        <button class="btn btn-sm" data-copy="${esc(privLink)}" data-lbl="Private rejoin link">Copy</button></div>
+      <p class="hint">The rejoin link restores your seat on another device — keep it to yourself.</p>` : ''}
+      ${joined && !realUser() ? '<button class="btn btn-sm" id="cb-link-google">Link a Google account</button>' : ''}
+      ${joined && !l.curRound ? '<button class="btn btn-sm btn-danger" id="cb-leave">Leave the league</button>' : ''}
+    </div>`;
+}
+
+function cbBindPlayers() {
+  bindCopyButtons();
+  $('#cbj-go')?.addEventListener('click', joinLeague);
+  $('#cbj-name')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinLeague(); });
+  $('#cb-link-google')?.addEventListener('click', linkCbGoogle);
+  $('#cb-leave')?.addEventListener('click', leaveLeague);
+}
+
+async function joinLeague() {
+  const name = $('#cbj-name')?.value.trim();
+  if (!name) { toast('Enter a name first.', true); return; }
+  if (name.length > 30) { toast('Keep the name under 30 characters.', true); return; }
+  try {
+    await ensureAuthed();
+    const uid = auth.currentUser.uid;
+    const googleUid = realUser()?.uid || null;
+    const pid = rid(10);
+    const secret = rid(16);
+    const ref = doc(db, 'cb-leagues', state.leagueId);
+    await runTransaction(db, async (t) => {
+      const snap = await t.get(ref);
+      const l = snap.data();
+      if (!l) throw new Error('League not found');
+      if (l.archived) throw new Error('This league is archived');
+      if (l.status === 'done') throw new Error('This league is finished');
+      const s = cbSettings(l);
+      const players = l.players || {};
+      if (Object.keys(players).length >= s.maxPlayers) throw new Error('The league is full');
+      if (Object.values(players).some((p) => p.name.toLowerCase() === name.toLowerCase())) {
+        throw new Error('That name is already taken');
+      }
+      t.update(ref, {
+        [`players.${pid}`]: { name, uid: googleUid, joinedAt: Date.now() },
+        [`uids.${uid}`]: pid,
+      });
+      t.set(doc(db, 'cb-leagues', state.leagueId, 'private', pid), {
+        secret, pushSubs: [], uid: googleUid, uids: { [uid]: true },
+      });
+    });
+    saveCbCreds(state.leagueId, { pid, secret, name, leagueName: state.league?.name || '' });
+    state.cbSeatBound = true;
+    subscribeCbPriv();
+    syncCbChatSubs();
+    recordCbMembership();
+    toast(`Welcome, ${name}!`);
+    render();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function linkCbGoogle() {
+  try {
+    await linkWithPopup(auth.currentUser, new GoogleAuthProvider());
+  } catch (e) {
+    if (e.code === 'auth/credential-already-in-use') {
+      try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+      catch (e2) { if (e2.code !== 'auth/popup-closed-by-user') toast(e2.message, true); return; }
+    } else if (e.code === 'auth/popup-closed-by-user') return;
+    else { toast(e.message, true); return; }
+  }
+  try {
+    await apiPost('/api/cb/claim', {
+      leagueId: state.leagueId, pid: cbPid(), secret: state.cbCreds?.secret || null,
+    });
+    recordCbMembership();
+    toast('Google account linked — you can now rejoin from any device.');
+    render();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function leaveLeague() {
+  const me = cbPid();
+  if (!me) return;
+  if (!confirm('Leave this league? Your seat opens up again.')) return;
+  try {
+    await ensureAuthed();
+    const uid = auth.currentUser.uid;
+    const ref = doc(db, 'cb-leagues', state.leagueId);
+    await runTransaction(db, async (t) => {
+      const snap = await t.get(ref);
+      const l = snap.data();
+      if (!l) throw new Error('League not found');
+      if (l.curRound) throw new Error('The league has started — ask the admin to drop you instead.');
+      t.update(ref, {
+        [`players.${me}`]: deleteField(),
+        [`uids.${uid}`]: deleteField(),
+      });
+    });
+    await deleteDoc(doc(db, 'cb-leagues', state.leagueId, 'private', me)).catch(() => {});
+    state.cbSeatBound = false;
+    state.myPriv = null;
+    const all = allCbCreds();
+    if (all[state.leagueId]) {
+      delete all[state.leagueId].pid;
+      delete all[state.leagueId].secret;
+      delete all[state.leagueId].name;
+      localStorage.setItem('cb_creds', JSON.stringify(all));
+      state.cbCreds = all[state.leagueId];
+    }
+    if (realUser() && !isCbAdmin()) {
+      await setDoc(doc(db, 'rd-users', realUser().uid), {
+        leagues: { [state.leagueId]: deleteField() },
+      }, { merge: true });
+    }
+    toast('You left the league.');
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------- Admin tab ----------
+function cbAdminHtml() {
+  const l = state.league;
+  const s = cbSettings(l);
+  const n = l.curRound;
+  const round = n ? state.cbRounds[n] : null;
+  const canStart = !l.archived && l.status !== 'done' && (!n || round?.status === 'done');
+  const activePids = Object.entries(l.players || {}).filter(([, p]) => !p.dropped);
+  const waiting = round?.status === 'submission'
+    ? activePids.filter(([pid]) => !round.submitted?.[pid]) : [];
+  const unresolved = round?.status === 'playing'
+    ? Object.entries(round.matches || {}).filter(([, m]) => !m.result) : [];
+  return `<div class="adminbox">
+    ${round && round.status === 'submission' ? `<div class="adm-section">
+      <h3>Round ${n} — submissions</h3>
+      <p class="hint">${waiting.length
+        ? `Waiting for: ${waiting.map(([, p]) => esc(p.name)).join(', ')}`
+        : 'Everyone has submitted — you can reveal now.'}</p>
+      <div class="adm-inline">
+        <input type="datetime-local" id="cba-deadline" value="${toLocalInputValue(round.deadline)}">
+        <button class="btn btn-sm" id="cba-deadline-save">Move deadline</button>
+      </div>
+      <div class="adm-actions">
+        <button class="btn btn-sm btn-primary" id="cba-reveal">Reveal decks now</button>
+      </div>
+    </div>` : ''}
+    ${round && round.status === 'playing' ? `<div class="adm-section">
+      <h3>Round ${n} — open matches</h3>
+      ${unresolved.length ? unresolved.map(([mid, m]) => `
+        <div class="cb-match ${m.disputed ? 'disputed' : ''}">
+          <div class="cb-match-head"><span class="cb-vs">${esc(cbPlayerName(m.a))} vs ${esc(cbPlayerName(m.b))}</span>
+            ${m.disputed ? '<span class="droptag">DISPUTED</span>' : `<span class="hint">${Object.keys(m.reports || {}).length}/2 reported</span>`}</div>
+          ${m.disputed ? `<p class="hint">${Object.entries(m.reports || {}).map(([pid, rep]) =>
+            `${esc(cbPlayerName(pid))} reported: ${rep.map((g, i) =>
+              `G${i + 1} ${g === 'D' ? 'draw' : g === 'W' ? esc(cbPlayerName(m.a)) : esc(cbPlayerName(m.b))}`).join(', ')}`)
+            .join(' — ')}</p>` : ''}
+          <div class="adm-inline">
+            ${[0, 1].map((gi) => `<select data-cbres="${esc(mid)}|${gi}">
+              <option value="">Game ${gi + 1} (${gi === 0 ? esc(cbPlayerName(m.a)) : esc(cbPlayerName(m.b))} on the play)…</option>
+              <option value="W">${esc(cbPlayerName(m.a))} won</option>
+              <option value="D">Draw</option>
+              <option value="L">${esc(cbPlayerName(m.b))} won</option>
+            </select>`).join('')}
+            <button class="btn btn-sm" data-cbresolve="${esc(mid)}">Set result</button>
+          </div>
+        </div>`).join('') : '<p class="hint">All results are in.</p>'}
+    </div>` : ''}
+    ${canStart ? `<div class="adm-section">
+      <h3>Start round ${(n || 0) + 1}${(n || 0) + 1 > s.rounds ? ' (extends the league)' : ` of ${s.rounds}`}</h3>
+      <p class="hint">The current banlist is snapshotted into the round. Players submit blind
+      until the deadline; decks reveal automatically.</p>
+      <div class="adm-inline">
+        <input type="datetime-local" id="cba-start-deadline" value="${toLocalInputValue(Date.now() + 3 * 24 * 3600e3)}">
+        <button class="btn btn-sm btn-primary" id="cba-start">Start round</button>
+      </div>
+      ${n && l.status !== 'done' ? '<div class="adm-actions"><button class="btn btn-sm" id="cba-finish">Finish the league now</button></div>' : ''}
+    </div>` : ''}
+    <div class="adm-section">
+      <h3>Banlist</h3>
+      <p class="hint">One card per line, on top of ${cbFormatLabel(s.format)} legality. Applies
+      from the next round (each round keeps the banlist it started with). Classic 4CB bans every
+      card of the round winner's deck — add them here.</p>
+      <textarea id="cba-bans" spellcheck="false" style="min-height:110px">${esc((l.customBans || []).join('\n'))}</textarea>
+      <div class="adm-actions"><button class="btn btn-sm" id="cba-bans-save">Save banlist</button></div>
+    </div>
+    <div class="adm-section">
+      <h3>Settings</h3>
+      <p class="hint">${s.handSize}-card blind · ${cbFormatLabel(s.format)} ·
+        ${s.highlander ? 'highlander' : 'duplicates allowed'} — fixed after creation.</p>
+      <div class="adm-inline">
+        <label class="hint" for="cba-rounds" style="margin:0">Planned rounds</label>
+        <input type="number" class="adm-num" id="cba-rounds" value="${s.rounds}" min="${n || 1}" max="50">
+        <button class="btn btn-sm" id="cba-rounds-save">Save</button>
+      </div>
+    </div>
+    <div class="adm-section">
+      <h3>Players</h3>
+      ${Object.entries(l.players || {}).map(([pid, p]) => `
+        <div class="admin-player"><div class="top"><span class="nm">${esc(p.name)}
+          ${p.dropped ? '<span class="droptag">DROPPED</span>' : ''}</span>
+          <span>
+            ${!l.curRound ? `<button class="btn btn-sm" data-cbkick="${esc(pid)}">Remove</button>`
+              : `<button class="btn btn-sm" data-cbdrop="${esc(pid)}">${p.dropped ? 'Undrop' : 'Drop'}</button>`}
+          </span></div></div>`).join('') || '<p class="hint">No players yet.</p>'}
+    </div>
+    <div class="adm-section">
+      <h3>Danger zone</h3>
+      <div class="adm-actions">
+        <button class="btn btn-sm" id="cba-archive">${l.archived ? 'Unarchive league' : 'Archive league (read only)'}</button>
+        <button class="btn btn-sm btn-danger" id="cba-delete">Delete league</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function cbBindAdmin() {
+  const lRef = doc(db, 'cb-leagues', state.leagueId);
+  const call = async (body, okMsg) => {
+    try {
+      await ensureAuthed();
+      await apiPost('/api/cb/round', { leagueId: state.leagueId, ...body });
+      if (okMsg) toast(okMsg);
+    } catch (e) { toast(e.message, true); }
+  };
+  $('#cba-start')?.addEventListener('click', () => {
+    const v = $('#cba-start-deadline').value;
+    const deadline = v ? new Date(v).getTime() : 0;
+    call({ op: 'start', deadline }, 'Round started.');
+  });
+  $('#cba-deadline-save')?.addEventListener('click', () => {
+    const v = $('#cba-deadline').value;
+    const deadline = v ? new Date(v).getTime() : 0;
+    call({ op: 'deadline', deadline }, 'Deadline moved.');
+  });
+  $('#cba-reveal')?.addEventListener('click', () => {
+    const l = state.league;
+    const round = state.cbRounds[l.curRound];
+    const waiting = Object.entries(l.players || {})
+      .filter(([pid, p]) => !p.dropped && !round?.submitted?.[pid]);
+    if (waiting.length && !confirm(
+      `${waiting.length} player(s) have not submitted and will sit the round out. Reveal anyway?`)) return;
+    call({ op: 'reveal', force: waiting.length > 0 }, 'Decks revealed.');
+  });
+  $('#cba-finish')?.addEventListener('click', () => {
+    if (confirm('Finish the league now? No further rounds can be started.')) {
+      call({ op: 'finish-league' }, 'League finished.');
+    }
+  });
+  $$('[data-cbresolve]').forEach((b) => b.addEventListener('click', () => {
+    const mid = b.dataset.cbresolve;
+    const result = [0, 1].map((gi) => $(`[data-cbres="${mid}|${gi}"]`)?.value || '');
+    if (result.some((g) => !g)) { toast('Pick a result for both games first.', true); return; }
+    call({ op: 'resolve', matchId: mid, result }, 'Result set.');
+  }));
+  $('#cba-bans-save')?.addEventListener('click', async () => {
+    const bans = $('#cba-bans').value.split('\n').map((x) => x.trim()).filter(Boolean);
+    try {
+      await updateDoc(lRef, { customBans: bans });
+      toast(`Banlist saved (${bans.length} card${bans.length === 1 ? '' : 's'}) — applies from the next round.`);
+    } catch (e) { toast(e.message, true); }
+  });
+  $('#cba-rounds-save')?.addEventListener('click', async () => {
+    const v = Math.max(state.league.curRound || 1, Math.min(50, +$('#cba-rounds').value || 1));
+    try {
+      await updateDoc(lRef, { 'settings.rounds': v });
+      toast(`Planned rounds set to ${v}.`);
+    } catch (e) { toast(e.message, true); }
+  });
+  $$('[data-cbdrop]').forEach((b) => b.addEventListener('click', async () => {
+    const pid = b.dataset.cbdrop;
+    const dropped = !state.league.players?.[pid]?.dropped;
+    try {
+      await updateDoc(lRef, { [`players.${pid}.dropped`]: dropped ? true : deleteField() });
+      toast(dropped ? 'Player dropped — they sit out future rounds.' : 'Player is back in.');
+    } catch (e) { toast(e.message, true); }
+  }));
+  $$('[data-cbkick]').forEach((b) => b.addEventListener('click', async () => {
+    const pid = b.dataset.cbkick;
+    if (!confirm(`Remove ${cbPlayerName(pid)} from the league?`)) return;
+    try {
+      const upd = { [`players.${pid}`]: deleteField() };
+      for (const [uid, p] of Object.entries(state.league.uids || {})) {
+        if (p === pid) upd[`uids.${uid}`] = deleteField();
+      }
+      await updateDoc(lRef, upd);
+      await deleteDoc(doc(db, 'cb-leagues', state.leagueId, 'private', pid)).catch(() => {});
+      toast('Player removed.');
+    } catch (e) { toast(e.message, true); }
+  }));
+  $('#cba-archive')?.addEventListener('click', async () => {
+    const archived = !state.league.archived;
+    if (archived && !confirm('Archive this league? It becomes read only for everyone.')) return;
+    try {
+      await updateDoc(lRef, { archived });
+      toast(archived ? 'League archived.' : 'League unarchived.');
+    } catch (e) { toast(e.message, true); }
+  });
+  $('#cba-delete')?.addEventListener('click', async () => {
+    if (!confirm('Delete this league and ALL its rounds, decks and results? This cannot be undone.')) return;
+    try {
+      await ensureAuthed();
+      await apiPost('/api/cb/round', { leagueId: state.leagueId, op: 'delete' });
+      toast('League deleted.');
+      location.href = URL_4CB;
+    } catch (e) { toast(e.message, true); }
+  });
 }
 
 // ----------------------------------------------------------------

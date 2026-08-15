@@ -111,5 +111,85 @@ service cloud.firestore {
     match /rd-contact/{msgId} {
       allow read, write: if false;
     }
+
+    // ------------------------------------------------------------
+    // Card Blind (4CB) leagues. Same trust model as drafts, with one
+    // sharpening: private docs hold the BLIND deck submissions, so
+    // not even the league admin may read them — only uids bound to
+    // the seat. Rounds are written exclusively by the functions.
+    // ------------------------------------------------------------
+    function leagueData(leagueId) {
+      return get(/databases/$(database)/documents/cb-leagues/$(leagueId)).data;
+    }
+    function isLeagueAdmin(leagueId) {
+      return request.auth != null &&
+        (request.auth.uid == leagueData(leagueId).adminUid || isOwner());
+    }
+
+    match /cb-leagues/{leagueId} {
+      allow get: if true;
+      allow list: if isOwner();
+      allow create: if request.auth != null
+        && request.resource.data.adminUid == request.auth.uid
+        && request.resource.data.status == 'lobby';
+      allow delete: if request.auth != null
+        && (request.auth.uid == resource.data.adminUid || isOwner());
+      allow update: if
+        // Admin: anything except identity and the round counter
+        // (curRound moves only through the cbRound function)
+        (request.auth != null
+          && (request.auth.uid == resource.data.adminUid || isOwner())
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['adminUid', 'curRound']))
+        ||
+        // Self-service join/leave: leagues stay open to new players
+        // until they are done — late joiners play from the next round
+        (request.auth != null
+          && resource.data.status != 'done'
+          && resource.data.get('archived', false) == false
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players', 'uids'])
+          && request.resource.data.get('uids', {}).diff(resource.data.get('uids', {}))
+               .affectedKeys().hasOnly([request.auth.uid])
+          && request.resource.data.players.diff(resource.data.players).affectedKeys()
+               .hasOnly([resource.data.get('uids', {}).get(request.auth.uid, '-'),
+                         request.resource.data.get('uids', {}).get(request.auth.uid, '-')])
+          && request.resource.data.players.size() <= resource.data.settings.maxPlayers);
+    }
+
+    // Rounds (deadline, banlist snapshot, revealed decks, matches,
+    // results): public read for watchers, server-only writes.
+    match /cb-leagues/{leagueId}/rounds/{roundId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Per-seat private data incl. the blind submission. NO admin
+    // read — the admin usually plays in the league too. `sub` is
+    // written only by cbSubmit (Admin SDK), clients touch pushSubs.
+    match /cb-leagues/{leagueId}/private/{pid} {
+      allow read: if request.auth != null
+        && resource.data.get('uids', {}).get(request.auth.uid, false) == true;
+      allow create: if request.auth != null
+        && request.resource.data.get('uids', {}).get(request.auth.uid, false) == true;
+      allow update: if request.auth != null
+        && resource.data.get('uids', {}).get(request.auth.uid, false) == true
+        && leagueData(leagueId).get('archived', false) == false
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['pushSubs']);
+      allow delete: if request.auth != null
+        && (resource.data.get('uids', {}).get(request.auth.uid, false) == true
+            || isLeagueAdmin(leagueId));
+    }
+
+    // Per-match chat/notes: one doc per pairing, created at reveal by
+    // the functions. Readable ONLY by the two players of the match and
+    // the league admin; written only through the cbChat function.
+    match /cb-leagues/{leagueId}/matchchat/{chatId} {
+      allow get: if request.auth != null
+        && (isLeagueAdmin(leagueId)
+            || leagueData(leagueId).get('uids', {}).get(request.auth.uid, '') == resource.data.a
+            || leagueData(leagueId).get('uids', {}).get(request.auth.uid, '') == resource.data.b);
+      allow list: if isOwner();
+      allow write: if false;
+    }
   }
 }
