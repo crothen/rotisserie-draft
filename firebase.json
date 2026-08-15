@@ -13,7 +13,8 @@
     "source": "functions"
   },
   "hosting": {
-    "public": "public",
+    "public": "web/dist",
+    "predeploy": ["npm --prefix web run build"],
     "ignore": ["firebase.json", "**/node_modules/**"],
     "rewrites": [
       { "source": "/new", "destination": "/index.html" },

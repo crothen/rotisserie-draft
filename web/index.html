@@ -14,21 +14,15 @@
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
-  <!-- Absolute asset paths: pages like /4cb/rules live below a nested
-       path, so relative URLs would resolve wrong. The app is always
-       deployed at the domain root. -->
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <meta name="theme-color" content="#12141c">
   <link rel="apple-touch-icon" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div id="app">
+  <div id="root">
     <div class="loading-screen"><div class="spinner"></div><p>Loading…</p></div>
   </div>
-  <div id="modal-root"></div>
-  <div id="toast-root"></div>
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

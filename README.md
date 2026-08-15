@@ -9,7 +9,22 @@ notifications, pick queues, bots, and a live draft grid.
 
 ## Stack
 
-- Plain HTML/JS/CSS frontend (no build step), Firebase Hosting
+- React 19 + TypeScript + Vite frontend in `web/` (Firebase Hosting
+  serves `web/dist`; `firebase deploy` builds automatically via the
+  hosting predeploy hook)
+  - `web/src/lib` — Firebase init, typed Firestore doc shapes, pure
+    draft/league logic (mirrored in `functions/index.js`), Scryfall
+    access, push, localStorage creds
+  - `web/src/pages` — landing, dashboard, new draft, contact, site
+    admin, Card Blind home/rules
+  - `web/src/draft` — the draft page (lobby, pool/search, grid, decks,
+    queue, chat, admin)
+  - `web/src/league` — the Card Blind league page (round, standings,
+    history, players, admin)
+- Local dev: `firebase emulators:start` (auth/firestore/functions/
+  hosting; the app auto-connects to emulators on localhost) plus
+  `npm --prefix web run dev` for hot reload (proxies `/api` to the
+  hosting emulator)
 - Firestore for draft state (realtime listeners, client transactions)
 - Card pools: CubeCobra cubes, set-based pools, pasted lists, or **format
   drafts** — the pool is implicitly "every card legal in X" (Legacy,
