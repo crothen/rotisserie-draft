@@ -133,3 +133,23 @@ export function resolveQueue(
   }
   return { pick: null, from: null, stalledOn: null, consumed: [] };
 }
+
+/** Global pick index at which each snake round starts (mirrors the
+ *  buildSeq loop, including a possibly short final double round). */
+export function roundStarts(n: number, totalPicks: number, singleRounds: number): number[] {
+  const starts: number[] = [];
+  const count = Array(n).fill(0);
+  let g = 0;
+  let round = 0;
+  while (g < n * totalPicks) {
+    starts.push(g);
+    const per = round < singleRounds ? 1 : 2;
+    for (let i = 0; i < n; i++) {
+      for (let k = 0; k < per; k++) {
+        if (count[i] < totalPicks) { g++; count[i]++; }
+      }
+    }
+    round++;
+  }
+  return starts;
+}
