@@ -19,12 +19,14 @@ interface ScryfallCard {
   cmc?: number;
   rarity?: string;
   set?: string;
+  oracle_text?: string;
   image_uris?: { normal?: string; small?: string };
   card_faces?: {
     name?: string;
     mana_cost?: string;
     type_line?: string;
     colors?: string[];
+    oracle_text?: string;
     image_uris?: { normal?: string };
   }[];
 }
@@ -38,6 +40,7 @@ export function extractScryfallCard(card: ScryfallCard): PoolCard {
     c: (card.colors?.length ? card.colors : card.card_faces?.flatMap((f) => f.colors || []) || []).join(''),
     v: card.cmc ?? 0,
     r: card.rarity || '',
+    o: card.oracle_text || card.card_faces?.map((f) => f.oracle_text).filter(Boolean).join(' // ') || '',
   };
 }
 

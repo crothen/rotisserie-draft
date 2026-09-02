@@ -1,5 +1,6 @@
 // Classic pool browser: full stored pool with filters and sorting.
 import { useMemo } from 'react';
+import { matchesQuery, parseQuery } from '../lib/cardQuery';
 import type { PoolCard } from '../lib/types';
 import { useDraftCtx } from './context';
 import { useCardModals } from './CardModals';
@@ -22,7 +23,8 @@ export function PoolTab() {
       <div className="pool-controls">
         <div className="row2">
           <input
-            type="text" placeholder="Search name or type…" value={filters.search}
+            type="text" autoComplete="off" spellCheck={false}
+            placeholder="Search — Scryfall syntax works (o:flying c:u cmc:2 t:goblin)…" value={filters.search}
             onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
           />
           <select value={filters.sort}
@@ -78,12 +80,12 @@ export function PoolTab() {
 }
 
 function filterPool(pool: PoolCard[], pickedIds: Set<number>, f: PoolFilters): number[] {
-  const q = f.search.trim().toLowerCase();
+  const terms = parseQuery(f.search);
   const out: number[] = [];
   pool.forEach((c, i) => {
     if (!c) return;
     if (f.hidePicked && pickedIds.has(i)) return;
-    if (q && !c.n.toLowerCase().includes(q) && !c.t.toLowerCase().includes(q)) return;
+    if (terms.length && !matchesQuery(c, terms)) return;
     if (!matchesFilters(c, f)) return;
     if (f.sets.size && !f.sets.has(c.s || '')) return;
     out.push(i);

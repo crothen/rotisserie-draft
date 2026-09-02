@@ -14,6 +14,7 @@ export interface PoolCard {
   r?: string;           // rarity
   e?: number;           // rating (CubeCobra elo / staples rank score)
   s?: string;           // set code (set-based drafts)
+  o?: string;           // oracle text (faces joined with " // "); absent in older pools
 }
 
 // ---------- rotisserie drafts ----------

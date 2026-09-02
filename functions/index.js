@@ -369,7 +369,8 @@ exports.rdClaim = onRequest({ cors: true }, async (req, res) => {
 // ---------------------------------------------------------------
 const RD_FORMATS = new Set(['legacy', 'vintage', 'modern', 'premodern', 'pioneer', 'standard', 'pauper']);
 
-// Mirrors extractScryfallCard in public/app.js — keep the shapes in sync.
+// Mirrors extractScryfallCard in web/src/lib/scryfall.ts — keep the
+// shapes in sync.
 function extractCard(card) {
   return {
     n: card.name,
@@ -379,6 +380,7 @@ function extractCard(card) {
     c: (card.colors?.length ? card.colors : (card.card_faces || []).flatMap((f) => f.colors || [])).join(''),
     v: card.cmc ?? 0,
     r: card.rarity || '',
+    o: card.oracle_text || (card.card_faces || []).map((f) => f.oracle_text).filter(Boolean).join(' // ') || '',
   };
 }
 
