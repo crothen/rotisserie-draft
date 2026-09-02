@@ -81,39 +81,44 @@ export function queueGonePredicate(d: DraftDoc): (card: QueueCard) => boolean {
   return (card) => card.c != null && ids.has(card.c);
 }
 
+/** A row's fallback chain (migrates the old single `alt` shape). */
+export function queueRowAlts(item: QueueItem): QueueCard[] {
+  if (item.alts) return item.alts;
+  return item.ifTaken === 'alt' && item.alt ? [item.alt] : [];
+}
+/** Whether a row falls through to the next one when every card is gone. */
+export function queueRowCont(item: QueueItem): boolean {
+  return item.cont ?? item.ifTaken === 'next';
+}
+/** All cards of a row in try order: first choice, then the fallbacks. */
+export function queueRowCards(item: QueueItem): QueueCard[] {
+  return [{ c: item.c, n: item.n }, ...queueRowAlts(item)];
+}
+
 export interface QueueResolution {
   /** The card auto-pick should take now, or null if it must wait. */
   pick: QueueCard | null;
-  /** The queue entry that produced `pick` — the entry itself, or the
-   *  entry whose `alt` fired. Null when nothing is picked. */
+  /** The row that produced `pick` (its first choice or a fallback). */
   from: QueueItem | null;
-  /** The gone entry the walk stopped at, when the draft should wait
-   *  for the player (its `ifTaken` was 'stop', or its fallback was
-   *  gone too). Null when a pick was found or the queue ran dry. */
+  /** The row the walk stopped at because every card in it is gone and
+   *  it does not fall through. Null when a pick was found or the queue
+   *  ran dry. */
   stalledOn: QueueItem | null;
-  /** Entries to remove from the queue after `pick` succeeds: the
-   *  picked entry plus every gone entry the walk passed over. */
+  /** Rows to remove from the queue after `pick` succeeds: the picked
+   *  row plus every exhausted row the walk fell through. */
   consumed: QueueItem[];
 }
 
 /**
- * Walks the pick queue as a decision tree and decides what auto-pick
- * does on the owner's turn. Mirrored in functions/index.js — keep in
- * sync.
+ * Walks the pick queue and decides what auto-pick does on the owner's
+ * turn. Mirrored in functions/index.js — keep in sync.
  *
- * Each entry says what to do if its card is already gone (`tb` set,
- * or `gone(card)` true):
- *   - 'stop' / unset → stop here; the draft waits (`stalledOn`)
- *   - 'next'         → skip it and look at the next entry
- *   - 'alt'          → take `entry.alt` instead, if that is not gone
- *
- * `skipDead` is what bots use: every gone entry is skipped regardless
- * of its `ifTaken`, since nobody is waiting to decide for a bot.
- *
- * Rules: 'next' chains through any number of consecutive gone entries;
- * a fallback that is itself gone (or missing) stalls on its parent;
- * every gone entry passed over is consumed along with the pick so it
- * does not linger as a struck-through row.
+ * Rows are tried top to bottom. Within a row the first choice and its
+ * fallbacks are tried left to right; the first card that is not gone
+ * (`tb` on the first choice, or `gone(card)`) is picked. A row with
+ * every card gone either falls through to the next row (`cont`) or
+ * stops the walk so the player can decide. `skipDead` (bots) falls
+ * through every exhausted row regardless.
  */
 export function resolveQueue(
   queue: QueueItem[],
@@ -122,13 +127,12 @@ export function resolveQueue(
 ): QueueResolution {
   const passed: QueueItem[] = [];
   for (const item of queue) {
-    if (!item.tb && !gone(item)) {
-      return { pick: { c: item.c, n: item.n }, from: item, stalledOn: null, consumed: [...passed, item] };
+    const cards = queueRowCards(item);
+    const avail = cards.find((card, k) => !(k === 0 && item.tb) && !gone(card));
+    if (avail) {
+      return { pick: { c: avail.c, n: avail.n }, from: item, stalledOn: null, consumed: [...passed, item] };
     }
-    if (skipDead || item.ifTaken === 'next') { passed.push(item); continue; }
-    if (item.ifTaken === 'alt' && item.alt && !gone(item.alt)) {
-      return { pick: { c: item.alt.c, n: item.alt.n }, from: item, stalledOn: null, consumed: [...passed, item] };
-    }
+    if (skipDead || queueRowCont(item)) { passed.push(item); continue; }
     return { pick: null, from: null, stalledOn: item, consumed: [] };
   }
   return { pick: null, from: null, stalledOn: null, consumed: [] };

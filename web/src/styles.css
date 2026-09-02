@@ -728,22 +728,6 @@ a { color: var(--accent); }
 }
 .cb-table tr.me td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
-/* queue: per-entry "if taken" plan */
-.q-row { flex-wrap: wrap; }
-.q-main { display: flex; align-items: center; gap: 8px; flex: 1 0 100%; }
-.q-plan {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
-  flex: 1 0 100%; padding-left: 58px; font-size: 13px; color: var(--muted);
-}
-.q-plan-l { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
-.q-plan select { width: auto; font-size: 13px; padding: 4px 2px; }
-.q-alt { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
-.q-alt.taken b { text-decoration: line-through; color: var(--muted); }
-.q-alt-pick { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 200px; }
-.q-alt-pick .ac-wrap { flex: 1; }
-.q-alt-pick input[type="text"] { font-size: 13px; padding: 4px 2px; }
-.q-plan-tag { margin-left: auto; font-size: 11px; color: var(--muted); }
-.q-row.taken .q-plan { color: var(--text); }
 
 /* grid playback (visual only): step through the pick sequence */
 .playback { display: inline-flex; align-items: center; gap: 4px; }
@@ -760,3 +744,34 @@ a { color: var(--accent); }
   background: repeating-linear-gradient(135deg, var(--panel2) 0 6px, var(--panel) 6px 12px);
   border: 1px solid var(--border); box-sizing: border-box;
 }
+/* queue: each row is a chain of alternatives; the resolved path is
+   drawn with green (taken) and red (gone) markers */
+.q-row { flex-wrap: wrap; }
+.q-main { display: flex; align-items: center; gap: 8px; flex: 1 0 100%; }
+.q-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; flex: 1; min-width: 0; }
+.q-card {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px;
+  border: 1px solid var(--border); font-size: 13px; cursor: pointer; max-width: 100%;
+}
+.q-card .cn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-card.gone { border-color: rgba(224, 88, 88, 0.6); color: var(--muted); }
+.q-card.gone .cn { text-decoration: line-through; }
+.q-card.pick { border-color: var(--green); background: rgba(76, 175, 125, 0.14); color: var(--green); font-weight: 700; }
+.q-card.dim { opacity: 0.75; }
+.q-card .q-x { padding: 0 2px; font-size: 12px; color: var(--muted); background: none; border: none; cursor: pointer; }
+.q-card .q-x:hover { color: var(--red); }
+.q-arrow { font-size: 14px; color: var(--muted); }
+.q-arrow.red { color: var(--red); }
+.q-arrow.green { color: var(--green); }
+.q-tail { font-size: 11px; white-space: nowrap; }
+.q-tail.go { color: var(--green); }
+.q-tail.stop { color: var(--red); font-weight: 700; }
+.q-add { padding: 2px 8px; font-size: 14px; }
+.q-alt-pick { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 180px; }
+.q-alt-pick .ac-wrap { flex: 1; }
+.q-alt-pick input[type="text"] { font-size: 13px; padding: 4px 2px; }
+.q-side { display: flex; align-items: center; gap: 6px; flex: 1 0 100%; padding-left: 58px; font-size: 12px; color: var(--muted); }
+.q-side select { width: auto; font-size: 12px; padding: 3px 2px; }
+.q-side .q-plan-l { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+.q-plan-tag { margin-left: auto; font-size: 11px; color: var(--muted); }
+.q-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 0 0 10px; }

@@ -76,16 +76,18 @@ export interface QueueCard {
   n: string;
 }
 
-/** What auto-pick does on your turn when a queued card is already gone:
- *  - 'stop' (default): the draft waits for you to decide
- *  - 'next': carry on with the next queue entry
- *  - 'alt':  take `alt` instead */
-export type IfTaken = 'stop' | 'next' | 'alt';
-
+/** One queue row: a first choice plus a chain of fallbacks tried left
+ *  to right on the owner's turn. If every card in the row is gone the
+ *  draft waits for the player, unless `cont` says to fall through to
+ *  the next row. */
 export interface QueueItem extends QueueCard {
-  tb?: string;          // "taken by <player name>" — sniped marker
-  ifTaken?: IfTaken;
-  alt?: QueueCard;      // the fallback card when ifTaken === 'alt'
+  tb?: string;          // "taken by <player name>" — sniped marker (first choice)
+  alts?: QueueCard[];   // fallback chain
+  cont?: boolean;       // all gone → continue with the next row (default: wait)
+  /** @deprecated pre-chain shape, migrated on read by queueRowAlts/queueRowCont */
+  ifTaken?: 'stop' | 'next' | 'alt';
+  /** @deprecated see ifTaken */
+  alt?: QueueCard;
 }
 
 export interface PushSub {

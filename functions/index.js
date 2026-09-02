@@ -75,20 +75,23 @@ function draftSettings(d) {
 // (resolveQueue), keep in sync. Each entry says what auto-pick does
 // when its card is already gone: 'stop'/unset → wait for the player,
 // 'next' → look at the next entry, 'alt' → take entry.alt instead.
-// `skipDead` (bots) skips every gone entry regardless. 'next' chains
-// through consecutive gone entries; a gone/missing fallback stalls on
-// its parent; passed-over entries are consumed with the pick.
+// Rows are tried top to bottom; within a row the first choice and its
+// fallback chain are tried left to right and the first card not gone
+// is picked. A fully gone row falls through when `cont` is set (or for
+// bots via `skipDead`), otherwise the walk stops so the player decides.
 // Returns { pick, from, stalledOn, consumed }.
+const queueRowAlts = (item) => item.alts || (item.ifTaken === 'alt' && item.alt ? [item.alt] : []);
+const queueRowCont = (item) => item.cont ?? item.ifTaken === 'next';
+const queueRowCards = (item) => [{ c: item.c, n: item.n }, ...queueRowAlts(item)];
 function resolveQueue(queue, gone, skipDead = false) {
   const passed = [];
   for (const item of queue) {
-    if (!item.tb && !gone(item)) {
-      return { pick: { c: item.c, n: item.n }, from: item, stalledOn: null, consumed: [...passed, item] };
+    const cards = queueRowCards(item);
+    const avail = cards.find((card, k) => !(k === 0 && item.tb) && !gone(card));
+    if (avail) {
+      return { pick: { c: avail.c, n: avail.n }, from: item, stalledOn: null, consumed: [...passed, item] };
     }
-    if (skipDead || item.ifTaken === 'next') { passed.push(item); continue; }
-    if (item.ifTaken === 'alt' && item.alt && !gone(item.alt)) {
-      return { pick: { c: item.alt.c, n: item.alt.n }, from: item, stalledOn: null, consumed: [...passed, item] };
-    }
+    if (skipDead || queueRowCont(item)) { passed.push(item); continue; }
     return { pick: null, from: null, stalledOn: item, consumed: [] };
   }
   return { pick: null, from: null, stalledOn: null, consumed: [] };
@@ -719,10 +722,21 @@ exports.rdOnDraftWrite = onDocumentWritten(
     const newPicks = picks.slice(beforePicks.length);
     const activated = before.status === 'lobby' && after.status === 'active';
 
-    // --- Queue upkeep on new picks: drop cards the owner picked
-    // themselves; MARK cards sniped by someone else (tb = taken by)
-    // so the owner sees it and decides — they are not skipped over. ---
+    // --- Queue upkeep on new picks: rows whose first choice the owner
+    // picked themselves are dropped (own picks among the fallbacks just
+    // leave the chain); a first choice sniped by someone else is MARKED
+    // (tb = taken by) so the owner sees it — the row's fallback chain
+    // and `cont` decide what auto-pick does with it. ---
     if (newPicks.length) {
+      // format-draft queue cards have no pool index — match by name
+      const matchNew = (card) => isFormat
+        ? newPicks.find((p) => !p.skip && p.n && card.n && p.n.toLowerCase() === card.n.toLowerCase())
+        : newPicks.find((p) => p.c === card.c);
+      const allPickedIds = new Set(picks.map((p) => p.c));
+      const allTakenNames = new Set(picks.filter((p) => !p.skip).map((p) => p.n.toLowerCase()));
+      const goneNow = (card) => isFormat
+        ? allTakenNames.has((card.n || '').toLowerCase())
+        : card.c != null && allPickedIds.has(card.c);
       const privSnaps = await db.collection(`rd-drafts/${draftId}/private`).get();
       for (const pdoc of privSnaps.docs) {
         const q = pdoc.data().queue || [];
@@ -730,28 +744,34 @@ exports.rdOnDraftWrite = onDocumentWritten(
         const sniped = [];
         let changed = false;
         for (const item of q) {
-          // format-draft queue items have no pool index — match by name
-          const pick = item.tb ? null : (isFormat
-            ? newPicks.find((p) => !p.skip && p.n && item.n &&
-                p.n.toLowerCase() === item.n.toLowerCase())
-            : newPicks.find((p) => p.c === item.c));
-          if (!pick) { q2.push(item); continue; }
+          let row = item;
+          const alts = queueRowAlts(item);
+          const keptAlts = alts.filter((a) => { const p = matchNew(a); return !(p && p.p === pdoc.id); });
+          if (keptAlts.length !== alts.length) {
+            changed = true;
+            const { alt: _a, ifTaken: _i, ...rest } = row;
+            row = { ...rest, alts: keptAlts, cont: queueRowCont(item) };
+          }
+          const pick = item.tb ? null : matchNew(item);
+          if (!pick) { q2.push(row); continue; }
           changed = true;
-          if (pick.p === pdoc.id) continue; // own pick — drop silently
+          if (pick.p === pdoc.id) continue; // own pick — drop the row
           const pickerName = after.players?.[pick.p]?.name || 'someone';
-          q2.push({ ...item, tb: pickerName });
-          sniped.push({ item, pickerName });
+          row = { ...row, tb: pickerName };
+          q2.push(row);
+          sniped.push({ row, pickerName });
         }
         if (changed) await pdoc.ref.update({ queue: q2 });
         for (const s2 of sniped) {
-          const plan = s2.item.ifTaken === 'next'
-            ? 'your queue will skip to the next card.'
-            : s2.item.ifTaken === 'alt' && s2.item.alt?.n
-              ? `you will get ${s2.item.alt.n} instead.`
+          const nextAlt = queueRowAlts(s2.row).find((a) => !goneNow(a));
+          const plan = nextAlt
+            ? `you will get ${nextAlt.n} instead.`
+            : queueRowCont(s2.row)
+              ? 'your queue will move on to the next row.'
               : 'pick another card!';
           await sendPush(draftId, pdoc.id, {
             title,
-            body: `${s2.item.n} was picked by ${s2.pickerName} — ${plan}`,
+            body: `${s2.row.n} was picked by ${s2.pickerName} — ${plan}`,
             url,
             tag: 'rd-snipe',
           });
