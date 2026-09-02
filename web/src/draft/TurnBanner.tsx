@@ -1,4 +1,5 @@
 import { useTicker } from '../hooks/useCountdown';
+import { queueGonePredicate, resolveQueue } from '../lib/draftLogic';
 import { useDraftCtx } from './context';
 
 export function TurnBanner() {
@@ -19,14 +20,8 @@ export function TurnBanner() {
   const nextIdx = v.seq.slice(v.picks.length).findIndex((x) => x !== v.seq[v.picks.length]);
   const nextPid = nextIdx >= 0 ? v.order[v.seq[v.picks.length + nextIdx]] : null;
   const waiting = Math.round((Date.now() - (draft.turnStartedAt || Date.now())) / 36e5);
-  // my queue's decision point: a taken card at the top means auto-pick stalled
-  let stall = null;
-  if (myTurn) {
-    for (const item of priv?.queue || []) {
-      if (item.tb || (item.c != null && v.pickedIds.has(item.c))) { stall = item; }
-      break; // only the top entry counts
-    }
-  }
+  // my queue's decision point: the entry the auto-pick walk stalled on
+  const stall = myTurn ? resolveQueue(priv?.queue || [], queueGonePredicate(draft)).stalledOn : null;
   return (
     <div className={'turn-banner' + (myTurn ? ' mine' : '')}>
       <div className="big">

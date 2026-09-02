@@ -68,10 +68,23 @@ export interface DraftDoc {
   finishedAt?: number;
 }
 
-export interface QueueItem {
+/** A card reference inside the queue (pool index, or name only in
+ *  format drafts). */
+export interface QueueCard {
   c: number | null;     // pool index; null in format drafts
   n: string;
+}
+
+/** What auto-pick does on your turn when a queued card is already gone:
+ *  - 'stop' (default): the draft waits for you to decide
+ *  - 'next': carry on with the next queue entry
+ *  - 'alt':  take `alt` instead */
+export type IfTaken = 'stop' | 'next' | 'alt';
+
+export interface QueueItem extends QueueCard {
   tb?: string;          // "taken by <player name>" — sniped marker
+  ifTaken?: IfTaken;
+  alt?: QueueCard;      // the fallback card when ifTaken === 'alt'
 }
 
 export interface PushSub {

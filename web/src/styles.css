@@ -727,3 +727,20 @@ a { color: var(--accent); }
   color: var(--muted);
 }
 .cb-table tr.me td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+/* queue: per-entry "if taken" plan */
+.q-row { flex-wrap: wrap; }
+.q-main { display: flex; align-items: center; gap: 8px; flex: 1 0 100%; }
+.q-plan {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+  flex: 1 0 100%; padding-left: 58px; font-size: 13px; color: var(--muted);
+}
+.q-plan-l { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+.q-plan select { width: auto; font-size: 13px; padding: 4px 2px; }
+.q-alt { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+.q-alt.taken b { text-decoration: line-through; color: var(--muted); }
+.q-alt-pick { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 200px; }
+.q-alt-pick .ac-wrap { flex: 1; }
+.q-alt-pick input[type="text"] { font-size: 13px; padding: 4px 2px; }
+.q-plan-tag { margin-left: auto; font-size: 11px; color: var(--muted); }
+.q-row.taken .q-plan { color: var(--text); }

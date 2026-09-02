@@ -71,6 +71,29 @@ function draftSettings(d) {
   };
 }
 
+// Pick-queue decision tree — mirrored from web/src/lib/draftLogic.ts
+// (resolveQueue), keep in sync. Each entry says what auto-pick does
+// when its card is already gone: 'stop'/unset → wait for the player,
+// 'next' → look at the next entry, 'alt' → take entry.alt instead.
+// `skipDead` (bots) skips every gone entry regardless. 'next' chains
+// through consecutive gone entries; a gone/missing fallback stalls on
+// its parent; passed-over entries are consumed with the pick.
+// Returns { pick, from, stalledOn, consumed }.
+function resolveQueue(queue, gone, skipDead = false) {
+  const passed = [];
+  for (const item of queue) {
+    if (!item.tb && !gone(item)) {
+      return { pick: { c: item.c, n: item.n }, from: item, stalledOn: null, consumed: [...passed, item] };
+    }
+    if (skipDead || item.ifTaken === 'next') { passed.push(item); continue; }
+    if (item.ifTaken === 'alt' && item.alt && !gone(item.alt)) {
+      return { pick: { c: item.alt.c, n: item.alt.n }, from: item, stalledOn: null, consumed: [...passed, item] };
+    }
+    return { pick: null, from: null, stalledOn: item, consumed: [] };
+  }
+  return { pick: null, from: null, stalledOn: null, consumed: [] };
+}
+
 function shuffle(arr) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -719,9 +742,14 @@ exports.rdOnDraftWrite = onDocumentWritten(
         }
         if (changed) await pdoc.ref.update({ queue: q2 });
         for (const s2 of sniped) {
+          const plan = s2.item.ifTaken === 'next'
+            ? 'your queue will skip to the next card.'
+            : s2.item.ifTaken === 'alt' && s2.item.alt?.n
+              ? `you will get ${s2.item.alt.n} instead.`
+              : 'pick another card!';
           await sendPush(draftId, pdoc.id, {
             title,
-            body: `${s2.item.n} was picked by ${s2.pickerName} — pick another card!`,
+            body: `${s2.item.n} was picked by ${s2.pickerName} — ${plan}`,
             url,
             tag: 'rd-snipe',
           });
@@ -767,9 +795,10 @@ exports.rdOnDraftWrite = onDocumentWritten(
     }
 
     // --- Current player: try auto-pick from queue.
-    // Only the TOP entry counts: if it was taken by someone else the
-    // draft stops here so the player can decide for themselves.
-    // (Bots skip dead entries — nobody is deciding for them.) ---
+    // resolveQueue walks the queue as a decision tree: a gone entry
+    // either stops the draft so the player can decide (default), skips
+    // to the next entry, or hands over to its fallback card. (Bots skip
+    // dead entries — nobody is deciding for them.) ---
     const curPid = order[seq[picks.length]];
     const isBot = !!after.players?.[curPid]?.bot;
     const privRef = db.doc(`rd-drafts/${draftId}/private/${curPid}`);
@@ -777,27 +806,23 @@ exports.rdOnDraftWrite = onDocumentWritten(
     const queue = privSnap.exists ? privSnap.data().queue || [] : [];
     const allPicked = new Set(picks.map((p) => p.c));
     const takenNames = new Set(picks.filter((p) => !p.skip).map((p) => p.n.toLowerCase()));
-    let avail = null;
-    let stalledOn = null;
-    for (const item of queue) {
-      const gone = item.tb || (isFormat
-        ? takenNames.has((item.n || '').toLowerCase())
-        : allPicked.has(item.c));
-      if (gone) {
-        if (isBot) continue;
-        stalledOn = item;
-        break;
-      }
-      avail = item;
-      break;
-    }
+    const gone = isFormat
+      ? (card) => takenNames.has((card.n || '').toLowerCase())
+      : (card) => card.c != null && allPicked.has(card.c);
+    const { pick: avail, from, stalledOn, consumed } = resolveQueue(queue, gone, isBot);
+    const remaining = () => queue.filter((i) => !consumed.includes(i));
+    // "instead of A" when the pick came from a fallback or skipped past
+    // sniped entries
+    const insteadOf = avail && (from?.n !== avail.n || consumed.length > 1)
+      ? ` (instead of ${consumed.filter((i) => i.n !== avail.n).map((i) => i.n).join(', ')})`
+      : '';
     if (avail && isFormat) {
       // re-validate on the server — queue entries are client-written
       let resolved = null;
       try {
         resolved = await resolveFormatCard(avail.n, after.format);
       } catch (e) {
-        await privRef.update({ queue: queue.filter((i) => i !== avail) });
+        await privRef.update({ queue: remaining() });
         await sendPush(draftId, curPid, {
           title,
           body: `${avail.n} was removed from your queue (${e.message}) — pick manually!`,
@@ -811,10 +836,10 @@ exports.rdOnDraftWrite = onDocumentWritten(
         await applyFormatPick(draftId, curPid, resolved, true);
       } catch { didPick = false; }
       if (didPick) {
-        await privRef.update({ queue: queue.filter((i) => i !== avail) });
+        await privRef.update({ queue: remaining() });
         await sendPush(draftId, curPid, {
           title,
-          body: `Auto-picked ${resolved.name} from your queue.`,
+          body: `Auto-picked ${resolved.name} from your queue${insteadOf}.`,
           url,
           tag: 'rd-auto',
         });
@@ -837,10 +862,10 @@ exports.rdOnDraftWrite = onDocumentWritten(
         didPick = true;
       });
       if (didPick) {
-        await privRef.update({ queue: queue.filter((i) => i !== avail) });
+        await privRef.update({ queue: remaining() });
         await sendPush(draftId, curPid, {
           title,
-          body: `Auto-picked ${avail.n} from your queue.`,
+          body: `Auto-picked ${avail.n} from your queue${insteadOf}.`,
           url,
           tag: 'rd-auto',
         });

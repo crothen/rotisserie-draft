@@ -12,13 +12,15 @@ interface Props {
   fetchItems: (q: string) => Promise<AcItem[]> | AcItem[];
   /** Enter pressed with no dropdown selection (submit the raw value). */
   onSubmit?: () => void;
+  /** A dropdown suggestion was chosen (after onValue). */
+  onSelect?: (name: string) => void;
   minLen?: number;
   debounceMs?: number;
   disabled?: boolean;
 }
 
 export function AutocompleteInput({
-  id, placeholder, value, onValue, fetchItems, onSubmit, minLen = 2, debounceMs = 0, disabled,
+  id, placeholder, value, onValue, fetchItems, onSubmit, onSelect, minLen = 2, debounceMs = 0, disabled,
 }: Props) {
   const [items, setItems] = useState<AcItem[]>([]);
   const [open, setOpen] = useState(false);
@@ -45,6 +47,7 @@ export function AutocompleteInput({
   const pick = (name: string) => {
     onValue(name);
     hide();
+    onSelect?.(name);
   };
 
   return (
