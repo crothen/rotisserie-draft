@@ -148,26 +148,39 @@ export async function buildSetPool(
   const cards: PoolCard[] = [];
   for (let i = 0; i < sets.length; i++) {
     const code = sets[i].code;
-    let url: string | null =
-      `https://api.scryfall.com/cards/search?q=${encodeURIComponent(`e:${code} -t:basic is:booster`)}&unique=cards&order=set`;
-    let page = 0;
-    while (url && page < 12) {
-      onStatus(`Loading ${code.toUpperCase()} (${i + 1}/${sets.length})… ${cards.length} cards`);
-      const res = await fetch(url);
-      if (!res.ok) {
-        if (res.status === 404) break; // set has no matching cards
-        throw new Error(`Scryfall error ${res.status} for set ${code}`);
+    const label = `Loading ${code.toUpperCase()} (${i + 1}/${sets.length})`;
+    // `is:booster` keeps out starter-deck exclusives, promos and Alchemy
+    // rebalances — but Scryfall only tags booster contents some time
+    // after a set's release, so a brand-new set matches nothing. Fall
+    // back to every paper, non-basic card of the set in that case.
+    const queries = [
+      { q: `e:${code} -t:basic is:booster`, note: '' },
+      { q: `e:${code} -t:basic -is:digital`, note: ' — no booster data on Scryfall yet, using all cards' },
+    ];
+    for (const { q, note } of queries) {
+      const before = cards.length;
+      let url: string | null =
+        `https://api.scryfall.com/cards/search?q=${encodeURIComponent(q)}&unique=cards&order=set`;
+      let page = 0;
+      while (url && page < 12) {
+        onStatus(`${label}… ${cards.length} cards${note}`);
+        const res = await fetch(url);
+        if (!res.ok) {
+          if (res.status === 404) break; // query matched no cards
+          throw new Error(`Scryfall error ${res.status} for set ${code}`);
+        }
+        const data = (await res.json()) as SearchPage;
+        for (const card of data.data || []) {
+          const copies = mult[card.rarity || ''] ?? 1;
+          if (!copies) continue;
+          const info: PoolCard = { ...extractScryfallCard(card), e: 0, s: card.set };
+          for (let k = 0; k < copies; k++) cards.push(info);
+        }
+        url = data.has_more ? data.next_page ?? null : null;
+        page++;
+        await sleep(110);
       }
-      const data = (await res.json()) as SearchPage;
-      for (const card of data.data || []) {
-        const copies = mult[card.rarity || ''] ?? 1;
-        if (!copies) continue;
-        const info: PoolCard = { ...extractScryfallCard(card), e: 0, s: card.set };
-        for (let k = 0; k < copies; k++) cards.push(info);
-      }
-      url = data.has_more ? data.next_page ?? null : null;
-      page++;
-      await sleep(110);
+      if (cards.length > before) break; // this query found the set
     }
   }
   return cards;
