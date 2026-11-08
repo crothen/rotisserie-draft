@@ -13,7 +13,7 @@ export function PoolTab() {
   const { openCardModal } = useCardModals();
   const { filters, setFilters, toggle } = usePoolFilters();
 
-  // render in pages of 400 — cubes list lands last, so a hard cap hid them
+  // render in pages of 600 — cubes list lands last, so a hard cap hid them
   const [limit, setLimit] = useState(PAGE);
   useEffect(() => setLimit(PAGE), [filters]);
 
@@ -90,7 +90,7 @@ export function PoolTab() {
   );
 }
 
-const PAGE = 400;
+const PAGE = 600;
 
 function filterPool(pool: PoolCard[], pickedIds: Set<number>, f: PoolFilters): number[] {
   const terms = parseQuery(f.search);
