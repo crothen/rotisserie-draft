@@ -1,9 +1,15 @@
-// Pick / queue actions shared by the pickbar, pool tiles and modals.
+// Pick / queue / wishlist actions shared by the pickbar, pool tiles and modals.
 import { useModal } from '../components/Modal';
 import { useToast } from '../components/Toasts';
 import { draftView, isFormatDraft, pickedNamesSet } from '../lib/draftLogic';
+import type { QueueCard, WishCard } from '../lib/types';
 import { useDraftCtx } from './context';
-import { addToQueue, pickByIndex, pickByName } from './actions';
+import { addToQueue, addToWishlist, pickByIndex, pickByName, setWishlist } from './actions';
+
+/** Wishlist entries match like queue entries: by pool index in classic
+ *  drafts, by name in format drafts (no stable index there). */
+export const sameCard = (a: QueueCard, b: QueueCard) =>
+  a.c != null && b.c != null ? a.c === b.c : a.n.toLowerCase() === b.n.toLowerCase();
 
 export function usePickActions() {
   const ctx = useDraftCtx();
@@ -70,5 +76,40 @@ export function usePickActions() {
     await queueIndex(id);
   };
 
-  return { pickIndex, pickName, queueIndex, queueName, findAvailableByName };
+  const wishlist = priv?.wishlist || [];
+  const isWished = (card: QueueCard) => wishlist.some((w) => sameCard(w, card));
+
+  const wishCard = async (card: WishCard) => {
+    if (!me) { toast('Join the draft first.', true); return; }
+    if (isWished(card)) { toast('Already on your wishlist.'); return; }
+    try {
+      await addToWishlist(draftId, me, card);
+      toast(`${card.n} added to wishlist`);
+    } catch (e) { toast((e as Error).message, true); }
+  };
+
+  const unwishCard = async (card: QueueCard) => {
+    if (!me) return;
+    try {
+      await setWishlist(draftId, me, wishlist.filter((w) => !sameCard(w, card)));
+      toast(`${card.n} removed from wishlist`);
+    } catch (e) { toast((e as Error).message, true); }
+  };
+
+  const wishName = async (name: string) => {
+    if (!name) return;
+    if (isFormatDraft(draft)) {
+      if (pickedNamesSet(draft).has(name.toLowerCase())) { toast(`${name} was already picked.`, true); return; }
+      await wishCard({ c: null, n: name });
+      return;
+    }
+    const id = findAvailableByName(name);
+    if (id == null) { toast(`"${name}" is not available in the pool.`, true); return; }
+    await wishCard({ c: id, n: pool[id].n });
+  };
+
+  return {
+    pickIndex, pickName, queueIndex, queueName, findAvailableByName,
+    isWished, wishCard, unwishCard, wishName,
+  };
 }

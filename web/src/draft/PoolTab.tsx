@@ -1,21 +1,26 @@
 // Classic pool browser: full stored pool with filters and sorting.
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { matchesQuery, parseQuery } from '../lib/cardQuery';
 import type { PoolCard } from '../lib/types';
 import { useDraftCtx } from './context';
 import { useCardModals } from './CardModals';
 import { ColorChips, TypeChips } from './FilterChips';
 import { matchesFilters, usePoolFilters, type PoolFilters } from './filters';
+import { WishHeart } from './WishHeart';
 
 export function PoolTab() {
   const { draft, pool, v, priv } = useDraftCtx();
   const { openCardModal } = useCardModals();
   const { filters, setFilters, toggle } = usePoolFilters();
 
+  // render in pages of 400 — cubes list lands last, so a hard cap hid them
+  const [limit, setLimit] = useState(PAGE);
+  useEffect(() => setLimit(PAGE), [filters]);
+
   const ids = useMemo(() => filterPool(pool, v.pickedIds, filters), [pool, v.pickedIds, filters]);
   const availTotal = pool.length - v.pickedIds.size;
   const queueIds = new Set((priv?.queue || []).filter((i) => !i.tb).map((i) => i.c));
-  const shown = ids.slice(0, 400);
+  const shown = ids.slice(0, limit);
   const declaredSets = draft.sets || [];
 
   return (
@@ -57,7 +62,6 @@ export function PoolTab() {
       </div>
       <div className="pool-count">
         {ids.length} shown · {availTotal}/{pool.length} still available
-        {ids.length > 400 ? ' · showing first 400, refine your filter' : ''}
       </div>
       <div className="card-grid">
         {shown.map((i) => {
@@ -70,14 +74,23 @@ export function PoolTab() {
                 ? <img src={c.img.replace('/normal/', '/small/')} alt={c.n} loading="lazy" />
                 : <div className="noimg">{c.n}</div>}
               {queueIds.has(i) && !picked && <span className="q-tag" title="in your queue">Q</span>}
+              {!picked && <WishHeart card={{ c: i, n: c.n }} />}
               {picked && <span className="picked-tag">{picker || '?'}</span>}
             </div>
           );
         })}
       </div>
+      {ids.length > shown.length && (
+        <button className="btn btn-block" style={{ marginTop: 10 }}
+          onClick={() => setLimit((l) => l + PAGE)}>
+          Show more ({ids.length - shown.length} more cards)
+        </button>
+      )}
     </>
   );
 }
+
+const PAGE = 400;
 
 function filterPool(pool: PoolCard[], pickedIds: Set<number>, f: PoolFilters): number[] {
   const terms = parseQuery(f.search);

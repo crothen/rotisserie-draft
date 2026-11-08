@@ -90,6 +90,12 @@ export interface QueueItem extends QueueCard {
   alt?: QueueCard;
 }
 
+/** Wishlist entry. Format-draft cards have no pool entry until picked,
+ *  so they carry their own image for the wishlist's image view. */
+export interface WishCard extends QueueCard {
+  img?: string;
+}
+
 export interface PushSub {
   endpoint: string;
   keys: { p256dh: string; auth: string };
@@ -100,6 +106,7 @@ export interface PrivDoc {
   secret?: string;
   queue?: QueueItem[];
   sideboard?: number[];
+  wishlist?: WishCard[]; // cards to keep an eye on — never auto-picked
   pushSubs?: PushSub[];
   uid?: string | null;
   uids?: Record<string, boolean>;

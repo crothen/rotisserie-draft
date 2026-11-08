@@ -374,6 +374,23 @@ const RD_FORMATS = new Set(['legacy', 'vintage', 'modern', 'premodern', 'pioneer
 
 // Mirrors extractScryfallCard in web/src/lib/scryfall.ts — keep the
 // shapes in sync.
+// Lands have no printed colors, so bots used to score every land as
+// colorless and on-color duals never beat on-color spells. For bot
+// scoring, a land's colors are what it makes: basic land types in its
+// type line or fetch text, plus mana symbols in its rules text.
+const BASIC_LAND_COLORS = { Plains: 'W', Island: 'U', Swamp: 'B', Mountain: 'R', Forest: 'G' };
+function botColors(c) {
+  const t = c.t || '';
+  if (c.c || !/\bLand\b/.test(t)) return c.c || '';
+  const text = `${t}\n${c.o || ''}`;
+  const found = new Set();
+  for (const [type, col] of Object.entries(BASIC_LAND_COLORS)) {
+    if (new RegExp(`\\b${type}\\b`).test(text)) found.add(col);
+  }
+  for (const m of (c.o || '').matchAll(/\{([WUBRG])(?:\/[WUBRGP])?\}/g)) found.add(m[1]);
+  return 'WUBRG'.split('').filter((x) => found.has(x)).join('');
+}
+
 function extractCard(card) {
   return {
     n: card.name,
@@ -919,7 +936,7 @@ exports.rdOnDraftWrite = onDocumentWritten(
       let bestScore = -Infinity;
       for (const c of staples) {
         if (takenNames.has(c.n.toLowerCase())) continue;
-        const cols = c.c || '';
+        const cols = botColors(c);
         const bonus = cols.length
           ? (K * [...cols].reduce((sum, ch) => sum + (counts[ch] || 0), 0)) / cols.length
           : colorlessBonus;
@@ -963,7 +980,7 @@ exports.rdOnDraftWrite = onDocumentWritten(
       let bestScore = -Infinity;
       pool.forEach((c, i) => {
         if (allPicked.has(i)) return;
-        const cols = c.c || '';
+        const cols = botColors(c);
         const bonus = cols.length
           ? (K * [...cols].reduce((sum, ch) => sum + (counts[ch] || 0), 0)) / cols.length
           : colorlessBonus;

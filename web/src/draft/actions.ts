@@ -1,4 +1,4 @@
-// Draft actions: join/leave, picks, queue, sideboard, chat, admin ops.
+// Draft actions: join/leave, picks, queue, wishlist, sideboard, chat, admin ops.
 // All writes match the pre-React app byte-for-byte (rules depend on it).
 import {
   addDoc, collection, deleteDoc, deleteField, doc, getDoc, getDocs,
@@ -9,7 +9,7 @@ import { auth, db } from '../lib/firebase';
 import { apiPost, ensureAuthed, rid } from '../lib/api';
 import { draftCreds } from '../lib/creds';
 import { settingsOf } from '../lib/draftLogic';
-import type { DraftDoc, PlayerInfo, PrivDoc, QueueItem } from '../lib/types';
+import type { DraftDoc, PlayerInfo, PrivDoc, QueueItem, WishCard } from '../lib/types';
 
 const dref = (draftId: string) => doc(db, 'rd-drafts', draftId);
 const pref = (draftId: string, pid: string) => doc(db, 'rd-drafts', draftId, 'private', pid);
@@ -97,6 +97,15 @@ export async function addToQueue(draftId: string, me: string, item: QueueItem) {
 
 export async function setQueue(draftId: string, me: string, queue: QueueItem[]) {
   await updateDoc(pref(draftId, me), { queue });
+}
+
+// The wishlist only tracks cards; the server never reads it.
+export async function addToWishlist(draftId: string, me: string, card: WishCard) {
+  await updateDoc(pref(draftId, me), { wishlist: arrayUnion(card) });
+}
+
+export async function setWishlist(draftId: string, me: string, wishlist: WishCard[]) {
+  await updateDoc(pref(draftId, me), { wishlist });
 }
 
 export async function setSideboard(draftId: string, me: string, sideboard: number[]) {

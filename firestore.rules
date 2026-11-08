@@ -7,7 +7,7 @@ service cloud.firestore {
     // draft and its card pool. Everything else is locked down:
     // - listing drafts: site owner only (links stay unguessable)
     // - admin actions: the creator's auth uid (adminUid), or the owner
-    // - seat data (queue, sideboard, push subs, rejoin secret): only
+    // - seat data (queue, wishlist, sideboard, push subs, rejoin secret): only
     //   auth uids bound to that seat (bound at join or via rdClaim)
     // - chat: bound players only
     // - picks: never writable by clients — only the rdPick function
@@ -74,7 +74,7 @@ service cloud.firestore {
         && resource.data.get('uids', {}).get(request.auth.uid, false) == true
         && !isArchived(draftId)
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['queue', 'sideboard', 'pushSubs']);
+             .hasOnly(['queue', 'sideboard', 'pushSubs', 'wishlist']);
       allow delete: if request.auth != null
         && (resource.data.get('uids', {}).get(request.auth.uid, false) == true
             || isDraftAdmin(draftId));

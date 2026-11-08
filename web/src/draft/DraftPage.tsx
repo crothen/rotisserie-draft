@@ -16,10 +16,11 @@ import { FormatSearchTab } from './FormatSearchTab';
 import { GridTab } from './GridTab';
 import { DecksTab } from './DecksTab';
 import { QueueTab } from './QueueTab';
+import { WishlistTab } from './WishlistTab';
 import { AdminPanel } from './AdminPanel';
 import { ChatOverlay, ChatFabs } from './ChatOverlay';
 
-const DRAFT_TABS = ['pool', 'grid', 'players', 'queue', 'admin'];
+const DRAFT_TABS = ['pool', 'grid', 'players', 'queue', 'wishlist', 'admin'];
 
 export function DraftPage({ draftId }: { draftId: string }) {
   const [params, setParams] = useSearchParams();
@@ -120,8 +121,9 @@ export function DraftPage({ draftId }: { draftId: string }) {
     ['players', 'Decks'],
   ];
   if (me) tabs.push(['queue', `Queue${api.priv?.queue?.length ? ` (${api.priv.queue.length})` : ''}`]);
+  if (me) tabs.push(['wishlist', `Wishlist${api.priv?.wishlist?.length ? ` (${api.priv.wishlist.length})` : ''}`]);
   if (ctx.amAdmin) tabs.push(['admin', 'Admin']);
-  const activeTab = tab === 'queue' && !me ? 'pool' : tab;
+  const activeTab = (tab === 'queue' || tab === 'wishlist') && !me ? 'pool' : tab;
 
   return (
     <DraftContext.Provider value={ctx}>
@@ -146,6 +148,7 @@ export function DraftPage({ draftId }: { draftId: string }) {
           {activeTab === 'grid' && <GridTab />}
           {activeTab === 'players' && <DecksTab />}
           {activeTab === 'queue' && me && <QueueTab />}
+          {activeTab === 'wishlist' && me && <WishlistTab />}
           {activeTab === 'admin' && ctx.amAdmin && <AdminPanel />}
         </div>
       </div>

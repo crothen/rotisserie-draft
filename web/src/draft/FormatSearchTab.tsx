@@ -9,6 +9,7 @@ import { useDraftCtx } from './context';
 import { useCardModals } from './CardModals';
 import { ColorChips, TypeChips } from './FilterChips';
 import { matchesFilters, usePoolFilters } from './filters';
+import { WishHeart } from './WishHeart';
 
 export function FormatSearchTab() {
   const { draft, v, priv } = useDraftCtx();
@@ -112,6 +113,7 @@ export function FormatSearchTab() {
                 ? <img src={c.img.replace('/normal/', '/small/')} alt={c.n} loading="lazy" />
                 : <div className="noimg">{c.n}</div>}
               {queueNames.has(lower) && !isPicked && <span className="q-tag" title="in your queue">Q</span>}
+              {!isPicked && <WishHeart card={{ c: null, n: c.n, ...(c.img ? { img: c.img } : {}) }} />}
               {isPicked && <span className="picked-tag">{pickerOf(c.n) || '?'}</span>}
             </div>
           );

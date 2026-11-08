@@ -3,16 +3,32 @@
 // is passed explicitly — the content is a snapshot, like the old app.
 import { useModal } from '../components/Modal';
 import { ManaCost } from '../components/ManaCost';
-import { draftView } from '../lib/draftLogic';
+import { draftView, isFormatDraft } from '../lib/draftLogic';
 import { TYPE_FILTERS } from './filters';
 import { useDraftCtx } from './context';
 import { usePickActions } from './usePickActions';
-import type { Pick, PoolCard } from '../lib/types';
+import type { Pick, PoolCard, WishCard } from '../lib/types';
 
 export function useCardModals() {
   const ctx = useDraftCtx();
   const { openModal, closeModal } = useModal();
-  const { pickIndex, pickName, queueIndex, queueName } = usePickActions();
+  const { pickIndex, pickName, queueIndex, queueName, isWished, wishCard, unwishCard } = usePickActions();
+
+  /** Wishlist toggle. Snapshot modal, so it closes after acting. A
+   *  picked card can still be removed, but no longer added. */
+  const wishButton = (card: WishCard, picked: boolean) => {
+    const { me, archived } = ctx;
+    if (!me || archived) return null;
+    const wished = isWished(card);
+    if (picked && !wished) return null;
+    return (
+      <button className="btn" onClick={() => {
+        (wished ? unwishCard(card) : wishCard(card)).then(closeModal);
+      }}>
+        {wished ? '★ Remove from wishlist' : '☆ Wishlist'}
+      </button>
+    );
+  };
 
   const openCardModal = (cardId: number) => {
     const { draft, pool, me, priv, archived } = ctx;
@@ -46,6 +62,7 @@ export function useCardModals() {
               </button>
             </>
           )}
+          {wishButton({ c: isFormatDraft(draft) ? null : cardId, n: c.n }, picked)}
           <button className="btn" onClick={closeModal}>Close</button>
         </div>
       </>,
@@ -78,6 +95,7 @@ export function useCardModals() {
               </button>
             </>
           )}
+          {!v.done && wishButton({ c: null, n: c.n, ...(c.img ? { img: c.img } : {}) }, false)}
           <button className="btn" onClick={closeModal}>Close</button>
         </div>
       </>,
